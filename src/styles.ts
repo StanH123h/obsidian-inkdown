@@ -131,7 +131,10 @@ export const S = {
 	seg:
 		"position:relative;display:flex;flex:0 0 auto;box-sizing:border-box;" +
 		`border-radius:9px;padding:2px;background:${HOVER};overflow:hidden;`,
-	// Preview of the eraser's actual size, so the number means something
+	// Fixed-size box holding the eraser preview. The circle inside changes size;
+	// the box does not, so nothing below it shifts while the slider moves.
+	eraserPreviewBox:
+		"flex:0 0 auto;width:48px;height:48px;display:flex;align-items:center;justify-content:center;",
 	eraserPreview:
 		"flex:0 0 auto;border-radius:50%;box-sizing:border-box;" +
 		`border:1.5px dashed ${MUTED};background:rgba(150,150,150,.14);`,
@@ -154,8 +157,11 @@ export const S = {
 	sliderKnob:
 		"position:absolute;border-radius:50%;background:var(--background-primary,#fff);" +
 		`border:2px solid ${ACCENT};box-shadow:0 1px 4px rgba(0,0,0,.2);`,
+	// Fixed width and tabular figures, so the number does not jump about as it
+	// goes from one digit to two
 	sliderVal:
-		`flex:0 0 auto;font-size:11px;text-align:center;color:${MUTED};font-variant-numeric:tabular-nums;`,
+		"flex:0 0 auto;width:30px;height:14px;line-height:14px;font-size:11px;text-align:center;" +
+		`color:${MUTED};font-variant-numeric:tabular-nums;`,
 
 	sizePop:
 		"position:absolute;z-index:30;display:flex;align-items:center;gap:11px;" +

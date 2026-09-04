@@ -338,7 +338,8 @@ export class HandwritingView extends TextFileView {
 			// The swatch scales with it, and while the slider moves we also park the
 			// real dashed ring in the middle of the page, at true size.
 			const previewPx = (v: number) => Math.min(8 + v * 0.7, 46);
-			const preview = bar.createDiv({ attr: { style: S.eraserPreview + `width:${previewPx(this.plugin.settings.eraserSize)}px;height:${previewPx(this.plugin.settings.eraserSize)}px;` } });
+			const previewBox = bar.createDiv({ attr: { style: S.eraserPreviewBox } });
+			const preview = previewBox.createDiv({ attr: { style: S.eraserPreview + `width:${previewPx(this.plugin.settings.eraserSize)}px;height:${previewPx(this.plugin.settings.eraserSize)}px;` } });
 			let clearRing = 0;
 			const slider = this.makeSlider(bar, vert, 3, 60,
 				() => this.plugin.settings.eraserSize,
