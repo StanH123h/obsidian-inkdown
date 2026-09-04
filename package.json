@@ -1,6 +1,6 @@
 {
   "name": "obsidian-handwriting",
-  "version": "0.9.9",
+  "version": "0.10.0",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",

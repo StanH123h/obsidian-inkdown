@@ -105,6 +105,44 @@ export const S = {
 		"white-space:nowrap;color:var(--text-on-accent,#fff);" +
 		"background:var(--interactive-accent,#5b6ed6);opacity:.85;touch-action:none;",
 
+	// Left-hand context bar: shows the configuration for whichever tool is active.
+	ctxBar:
+		"display:flex;flex-direction:column;align-items:center;justify-content:flex-start;" +
+		`gap:7px;flex:0 0 auto;width:72px;height:100%;padding:10px 6px;margin:0;box-sizing:border-box;` +
+		`overflow:hidden;border-left:1px solid ${BORDER};` +
+		"background:var(--background-secondary, rgba(127,127,127,.07));",
+	ctxBarNarrow:
+		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
+		`gap:7px;flex:0 0 auto;width:100%;height:58px;padding:8px 10px;margin:0;box-sizing:border-box;` +
+		`overflow-x:auto;overflow-y:hidden;border-top:1px solid ${BORDER};` +
+		"background:var(--background-secondary, rgba(127,127,127,.07));",
+
+	// Segmented control with a highlight pill that slides between the options.
+	seg:
+		"position:relative;display:flex;flex:0 0 auto;box-sizing:border-box;" +
+		`border-radius:9px;padding:2px;background:${HOVER};overflow:hidden;`,
+	segPill:
+		"position:absolute;border-radius:7px;background:var(--background-primary, #fff);" +
+		"box-shadow:0 1px 3px rgba(0,0,0,.16);transition:transform .18s cubic-bezier(.3,.7,.3,1);",
+	segItem:
+		"position:relative;display:flex;align-items:center;justify-content:center;" +
+		"flex:1 1 0;border:0;background:transparent;padding:0;margin:0;cursor:pointer;" +
+		`font-size:11px;line-height:1;letter-spacing:-.02em;color:${MUTED};transition:color .18s;`,
+	segItemOn: "color:var(--text-normal, #222);font-weight:600;",
+
+	// Hand-rolled slider. An <input type=range> needs the browser's default touch
+	// handling, which Obsidian mobile claims for its sidebar swipe, so dragging one
+	// opens the file pane instead of moving the knob. This uses pointer capture and
+	// touch-action:none, exactly like the canvas, so the gesture never leaks out.
+	slider: "position:relative;flex:0 0 auto;touch-action:none;cursor:pointer;",
+	sliderTrack: `position:absolute;border-radius:99px;background:${BORDER};`,
+	sliderFill: `position:absolute;border-radius:99px;background:${ACCENT};`,
+	sliderKnob:
+		"position:absolute;border-radius:50%;background:var(--background-primary,#fff);" +
+		`border:2px solid ${ACCENT};box-shadow:0 1px 4px rgba(0,0,0,.2);`,
+	sliderVal:
+		`flex:0 0 auto;font-size:11px;text-align:center;color:${MUTED};font-variant-numeric:tabular-nums;`,
+
 	sizePop:
 		"position:absolute;z-index:30;display:flex;align-items:center;gap:11px;" +
 		"padding:11px 15px;border-radius:13px;box-sizing:border-box;" +

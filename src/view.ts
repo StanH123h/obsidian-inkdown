@@ -1,7 +1,7 @@
 import { Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	distToPoly, drawStroke, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip, strokeInRegion,
+	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip, strokeInRegion,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -26,6 +26,7 @@ type Tool = "pen" | "eraser" | "lasso";
 type UndoEntry =
 	| { kind: "stroke-add"; index: number }
 	| { kind: "stroke-del"; items: { index: number; stroke: Stroke }[] }
+	| { kind: "strokes-set"; before: Stroke[] }
 	| { kind: "item-add"; id: string }
 	| { kind: "item-del"; index: number; item: LinkItem }
 	| { kind: "region-add"; id: string }
@@ -42,6 +43,13 @@ export class HandwritingView extends TextFileView {
 	private bctx!: CanvasRenderingContext2D;
 	private lctx!: CanvasRenderingContext2D;
 	private tools!: HTMLDivElement;
+	/** Left-hand bar showing configuration for whichever tool is active */
+	private ctxBar!: HTMLDivElement;
+	private syncCtx: (() => void) | null = null;
+	/** Where the eraser is, for the size preview ring */
+	private eraserAt: { x: number; y: number } | null = null;
+	/** Strokes as they were when an erase gesture began, so one drag is one undo */
+	private eraseSnap: Stroke[] | null = null;
 	private ro?: ResizeObserver;
 	private narrow: boolean | null = null;
 	private seps: HTMLElement[] = [];
@@ -59,9 +67,6 @@ export class HandwritingView extends TextFileView {
 	/** Which of the three width slots is active. The widths themselves live in
 	 *  settings, so they survive a restart and follow the vault across devices. */
 	private sizeIdx = 1;
-	private sizePop: HTMLElement | null = null;
-	private popOpens = 0;
-	private popInfo = "还没点过笔宽";
 
 	private get sizes() { return this.plugin.settings.sizes; }
 	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
@@ -153,8 +158,10 @@ export class HandwritingView extends TextFileView {
 				this.plugin.settings.lowLatency ? { desynchronized: true } : {}) as CanvasRenderingContext2D;
 			this.lowLatency = !!this.lctx.getContextAttributes?.().desynchronized;
 
+			this.ctxBar = root.createDiv({ attr: { style: S.ctxBar } });
 			this.tools = root.createDiv({ attr: { style: S.tools } });
 			this.buildToolbar(this.tools);
+			this.buildContextBar();
 			this.bindPointer();
 
 			this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
@@ -179,11 +186,12 @@ export class HandwritingView extends TextFileView {
 		this.narrow = narrow;
 		this.contentEl.setAttribute("style", narrow ? S.rootNarrow : S.root);
 		this.tools.setAttribute("style", narrow ? S.toolsNarrow : S.tools);
+		this.ctxBar?.setAttribute("style", narrow ? S.ctxBarNarrow : S.ctxBar);
 		for (const d of this.seps) d.setAttribute("style", narrow ? S.sepNarrow : S.sep);
+		if (this.ctxBar) this.buildContextBar();
 	}
 
 	async onClose() {
-		this.closeSizePop();
 		this.ro?.disconnect();
 		window.clearTimeout(this.sbarTimer);
 		this.clearLongPress();
@@ -204,47 +212,9 @@ export class HandwritingView extends TextFileView {
 		};
 		const sep = () => this.seps.push(bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } }));
 
-		const penBtn = btn("pen", "笔", () => { this.tool = "pen"; sync(); });
-		const eraBtn = btn("eraser", "橡皮（整笔擦除）", () => { this.tool = "eraser"; sync(); });
-		const lasBtn = btn("lasso", "套索：圈一块内容并命名", () => { this.tool = "lasso"; sync(); });
-		sep();
-
-		// Tapping an inactive width selects it; tapping the active one again opens a
-		// slider to change that width, with the dot previewing it live.
-		const sizeDots: HTMLElement[] = [];
-		const sizeBtns = this.sizes.map((sz, i) => {
-			const b = bar.createEl("button", { attr: { "aria-label": `笔宽 ${sz}`, style: S.btn } });
-			sizeDots.push(b.createDiv({ attr: { style: S.dot(dotPx(sz)) } }));
-			b.addEventListener("click", () => {
-				this.popInfo = `点击了第 ${i} 档，当前档 ${this.sizeIdx}，浮层 ${this.sizePop ? "开着" : "关着"}`;
-				if (this.sizeIdx === i && !this.sizePop) this.openSizePop(i, b, sizeDots[i]);
-				else { this.closeSizePop(); this.sizeIdx = i; sync(); }
-			});
-			// Second, independent way in: a long press opens the slider from any
-			// width button, whether or not it is the active one.
-			let lp = 0;
-			b.addEventListener("pointerdown", () => {
-				window.clearTimeout(lp);
-				lp = window.setTimeout(() => {
-					this.sizeIdx = i;
-					sync();
-					this.openSizePop(i, b, sizeDots[i]);
-				}, 480);
-			});
-			const cancelLp = () => window.clearTimeout(lp);
-			b.addEventListener("pointerup", cancelLp);
-			b.addEventListener("pointercancel", cancelLp);
-			b.addEventListener("pointerleave", cancelLp);
-			return b;
-		});
-		sep();
-
-		const colorDots: HTMLElement[] = [];
-		COLORS.forEach((c) => {
-			const b = bar.createEl("button", { attr: { "aria-label": "颜色", style: S.btn } });
-			colorDots.push(b.createDiv({ attr: { style: S.colorDot(c, false) } }));
-			b.addEventListener("click", () => { this.color = c; sync(); });
-		});
+		const penBtn = btn("pen", "笔", () => { this.tool = "pen"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
+		const eraBtn = btn("eraser", "橡皮", () => { this.tool = "eraser"; sync(); this.buildContextBar(); });
+		const lasBtn = btn("lasso", "套索：圈一块内容并命名", () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
 		sep();
 
 		btn("fit", "适应页宽（重置缩放）", () => this.fitWidth());
@@ -262,64 +232,189 @@ export class HandwritingView extends TextFileView {
 			penBtn.setAttribute("style", this.tool === "pen" ? S.btnOn : S.btn);
 			eraBtn.setAttribute("style", this.tool === "eraser" ? S.btnOn : S.btn);
 			lasBtn.setAttribute("style", this.tool === "lasso" ? S.btnOn : S.btn);
-			sizeBtns.forEach((b, i) => b.setAttribute("style", i === this.sizeIdx ? S.btnOn : S.btn));
-			colorDots.forEach((d, i) => d.setAttribute("style", S.colorDot(COLORS[i], COLORS[i] === this.color)));
 		};
 		sync();
 	}
 
-	/** Slider for one of the three pen widths. Anchored next to its button, and
-	 *  the button's dot previews the width while dragging. Saved on release, not
-	 *  on every input event, because saving refreshes every open view. */
-	private openSizePop(i: number, btn: HTMLElement, dot: HTMLElement) {
-		this.closeSizePop();
-		const pop = this.surface.createDiv({ attr: { style: S.sizePop } });
-		this.sizePop = pop;
+	/* ============ Left context bar ============ */
 
-		const range = pop.createEl("input", {
-			attr: { type: "range", min: "1", max: "28", step: "1", style: S.sizePopRange },
-		});
-		range.value = String(this.sizes[i]);
-		const val = pop.createDiv({ text: String(this.sizes[i]), attr: { style: S.sizePopVal } });
+	/** Notability's arrangement: the right bar picks a tool and never changes,
+	 *  the left bar shows that tool's configuration. */
+	private buildContextBar() {
+		const bar = this.ctxBar;
+		if (!bar) return;
+		bar.empty();
+		this.syncCtx = null;
+		const vert = !this.narrow;
 
-		range.addEventListener("input", () => {
-			const v = Number(range.value);
-			this.sizes[i] = v;
-			val.setText(String(v));
-			dot.setAttribute("style", S.dot(dotPx(v)));
-			btn.setAttribute("aria-label", `笔宽 ${v}`);
-		});
-		const save = () => this.plugin.saveSettings();
-		range.addEventListener("change", save);
-		range.addEventListener("pointerup", save);
-		pop.addEventListener("pointerdown", (e) => e.stopPropagation());
+		const sep = () => bar.createDiv({ attr: { style: vert ? S.sep : S.sepNarrow } });
 
-		// Place it beside the button: to the left of a vertical toolbar, above a
-		// horizontal one. Clamped so it never leaves the view.
-		const r = btn.getBoundingClientRect();
-		const root = this.surface.getBoundingClientRect();
-		const w = pop.offsetWidth || 260, h = pop.offsetHeight || 46;
-		let x = this.narrow
-			? r.left - root.left + r.width / 2 - w / 2
-			: r.left - root.left - w - 10;
-		let y = this.narrow
-			? r.top - root.top - h - 10
-			: r.top - root.top + r.height / 2 - h / 2;
-		// Clamp into the container. If the anchor maths produced something absurd
-		// (a zero-size button, a rect from before layout), fall back to a corner:
-		// a popup in the wrong place is still usable, an invisible one is not.
-		if (!Number.isFinite(x) || !Number.isFinite(y)) { x = 12; y = 12; }
-		x = Math.min(Math.max(x, 8), Math.max(8, root.width - w - 8));
-		y = Math.min(Math.max(y, 8), Math.max(8, root.height - h - 8));
-		pop.style.left = Math.round(x) + "px";
-		pop.style.top = Math.round(y) + "px";
-		this.popOpens++;
-		this.popInfo = `第 ${this.popOpens} 次，位置 ${Math.round(x)},${Math.round(y)}  尺寸 ${w}x${h}  容器 ${Math.round(root.width)}x${Math.round(root.height)}`;
+		if (this.tool === "pen") {
+			const dots: HTMLElement[] = [];
+			const btns = this.sizes.map((sz, i) => {
+				const b = bar.createEl("button", { attr: { "aria-label": `笔宽 ${sz}`, style: S.btn } });
+				dots.push(b.createDiv({ attr: { style: S.dot(dotPx(sz)) } }));
+				b.addEventListener("click", () => { this.sizeIdx = i; sync(); });
+				return b;
+			});
+			sep();
+
+			// Adjusts whichever width slot is active, previewing on its dot.
+			const slider = this.makeSlider(bar, vert, 1, 28,
+				() => this.sizes[this.sizeIdx],
+				(v) => {
+					this.sizes[this.sizeIdx] = v;
+					dots[this.sizeIdx].setAttribute("style", S.dot(dotPx(v)));
+					btns[this.sizeIdx].setAttribute("aria-label", `笔宽 ${v}`);
+				},
+				() => this.plugin.saveSettings());
+			sep();
+
+			const colorDots = COLORS.map((c) => {
+				const b = bar.createEl("button", { attr: { "aria-label": "颜色", style: S.btn } });
+				const d = b.createDiv({ attr: { style: S.colorDot(c, false) } });
+				b.addEventListener("click", () => { this.color = c; sync(); });
+				return d;
+			});
+
+			const sync = () => {
+				btns.forEach((b, i) => b.setAttribute("style", i === this.sizeIdx ? S.btnOn : S.btn));
+				colorDots.forEach((d, i) => d.setAttribute("style", S.colorDot(COLORS[i], COLORS[i] === this.color)));
+				slider.refresh();
+			};
+			this.syncCtx = sync;
+			sync();
+			return;
+		}
+
+		if (this.tool === "eraser") {
+			const seg = this.makeSegment(bar, vert,
+				[{ label: "整笔", value: "stroke" }, { label: "精确", value: "precise" }],
+				() => this.plugin.settings.eraserMode,
+				(v) => {
+					this.plugin.settings.eraserMode = v;
+					this.plugin.saveSettings();
+				});
+			sep();
+			const slider = this.makeSlider(bar, vert, 3, 60,
+				() => this.plugin.settings.eraserSize,
+				(v) => { this.plugin.settings.eraserSize = v; this.redrawLive(); },
+				() => this.plugin.saveSettings());
+			this.syncCtx = () => { seg.refresh(); slider.refresh(); };
+			return;
+		}
+
+		// The lasso has nothing to configure yet.
 	}
 
-	private closeSizePop() {
-		this.sizePop?.remove();
-		this.sizePop = null;
+	/** Segmented control with a pill that slides to the selected option.
+	 *  Two options sit side by side; in the narrow layout they stack instead. */
+	private makeSegment(
+		parent: HTMLElement, vert: boolean,
+		items: { label: string; value: string }[],
+		get: () => string, set: (v: string) => void,
+	) {
+		const W = vert ? 60 : 108, H = vert ? 30 : 26;
+		const wrap = parent.createDiv({ attr: { style: S.seg + `width:${W}px;height:${H}px;` } });
+		const iw = (W - 4) / items.length;
+		const pill = wrap.createDiv({
+			attr: { style: S.segPill + `width:${iw}px;height:${H - 4}px;left:2px;top:2px;` },
+		});
+		const els = items.map((it) => {
+			const b = wrap.createEl("button", { text: it.label, attr: { style: S.segItem } });
+			b.addEventListener("click", (e) => { e.stopPropagation(); set(it.value); refresh(); });
+			b.addEventListener("pointerdown", (e) => e.stopPropagation());
+			return b;
+		});
+		const refresh = () => {
+			const i = Math.max(0, items.findIndex((it) => it.value === get()));
+			pill.style.transform = `translateX(${i * iw}px)`;
+			els.forEach((b, j) => b.setAttribute("style", S.segItem + (j === i ? S.segItemOn : "")));
+		};
+		refresh();
+		return { refresh };
+	}
+
+	/** A slider we draw ourselves.
+	 *
+	 *  <input type="range"> needs the browser's default touch handling, and
+	 *  Obsidian mobile claims horizontal drags for its sidebar gesture, so
+	 *  dragging one opens the file pane instead of moving the knob. Pointer
+	 *  capture plus touch-action:none, the same approach the canvas uses, keeps
+	 *  the gesture from leaking out. */
+	private makeSlider(
+		parent: HTMLElement, vert: boolean, min: number, max: number,
+		get: () => number, onInput: (v: number) => void, onDone: () => void,
+	) {
+		const LEN = vert ? 118 : 118, THICK = 26, KNOB = 18;
+		const el = parent.createDiv({
+			attr: { style: S.slider + (vert ? `width:${THICK}px;height:${LEN}px;` : `width:${LEN}px;height:${THICK}px;`) },
+		});
+		const track = el.createDiv({
+			attr: {
+				style: S.sliderTrack + (vert
+					? `left:${THICK / 2 - 2}px;top:${KNOB / 2}px;width:4px;height:${LEN - KNOB}px;`
+					: `top:${THICK / 2 - 2}px;left:${KNOB / 2}px;height:4px;width:${LEN - KNOB}px;`),
+			},
+		});
+		const fill = el.createDiv({ attr: { style: S.sliderFill } });
+		const knob = el.createDiv({
+			attr: { style: S.sliderKnob + `width:${KNOB}px;height:${KNOB}px;box-sizing:border-box;` },
+		});
+		const label = parent.createDiv({ attr: { style: S.sliderVal } });
+
+		const span = LEN - KNOB;
+		const refresh = () => {
+			const v = get();
+			const t = (v - min) / (max - min);
+			if (vert) {
+				// Up is more, which reads the right way round for a size control.
+				const y = (1 - t) * span;
+				knob.style.left = `${THICK / 2 - KNOB / 2}px`;
+				knob.style.top = `${y}px`;
+				fill.style.cssText = S.sliderFill + `left:${THICK / 2 - 2}px;width:4px;top:${y + KNOB / 2}px;height:${span - y}px;`;
+			} else {
+				const x = t * span;
+				knob.style.top = `${THICK / 2 - KNOB / 2}px`;
+				knob.style.left = `${x}px`;
+				fill.style.cssText = S.sliderFill + `top:${THICK / 2 - 2}px;height:4px;left:${KNOB / 2}px;width:${x}px;`;
+			}
+			label.setText(String(v));
+		};
+
+		const apply = (e: PointerEvent) => {
+			const r = el.getBoundingClientRect();
+			const t = vert
+				? 1 - (e.clientY - r.top - KNOB / 2) / span
+				: (e.clientX - r.left - KNOB / 2) / span;
+			const v = Math.round(min + Math.min(Math.max(t, 0), 1) * (max - min));
+			if (v !== get()) { onInput(v); }
+			refresh();
+		};
+
+		el.addEventListener("pointerdown", (e: PointerEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			el.setPointerCapture(e.pointerId);
+			apply(e);
+		});
+		el.addEventListener("pointermove", (e: PointerEvent) => {
+			if (!el.hasPointerCapture(e.pointerId)) return;
+			e.preventDefault();
+			apply(e);
+		});
+		const end = (e: PointerEvent) => {
+			if (!el.hasPointerCapture(e.pointerId)) return;
+			el.releasePointerCapture(e.pointerId);
+			onDone();
+		};
+		el.addEventListener("pointerup", end);
+		el.addEventListener("pointercancel", end);
+		el.addEventListener("touchstart", (e: TouchEvent) => e.preventDefault());
+
+		void track;
+		refresh();
+		return { refresh };
 	}
 
 	/* ============ Size and coordinates ============ */
@@ -530,6 +625,20 @@ export class HandwritingView extends TextFileView {
 			drawStroke(this.lctx, s, this.opts(), false);
 		}
 		if (this.lasso && this.lasso.length > 1) this.drawRegionOutline(this.lctx, this.lasso, "drawing");
+		// Eraser preview: how big the eraser is and where it currently sits
+		if (this.tool === "eraser" && this.eraserAt) {
+			const cx = this.lctx, r = this.plugin.settings.eraserSize;
+			cx.save();
+			cx.lineWidth = 1.5 / this.scale;
+			cx.setLineDash([5 / this.scale, 4 / this.scale]);
+			cx.strokeStyle = "rgba(130,130,130,.9)";
+			cx.fillStyle = "rgba(150,150,150,.12)";
+			cx.beginPath();
+			cx.arc(this.eraserAt.x, this.eraserAt.y, r, 0, Math.PI * 2);
+			cx.fill();
+			cx.stroke();
+			cx.restore();
+		}
 	}
 
 	/** Draw straight from the event instead of waiting for requestAnimationFrame,
@@ -553,7 +662,6 @@ export class HandwritingView extends TextFileView {
 		const el = this.live;
 
 		this.registerDomEvent(el, "pointerdown", (e: PointerEvent) => {
-			this.closeSizePop();
 			const finger = e.pointerType === "touch";
 
 			if (finger && !this.plugin.settings.allowFinger) {
@@ -594,7 +702,12 @@ export class HandwritingView extends TextFileView {
 			el.setPointerCapture(e.pointerId);
 			const pt = this.toPage(e);
 
-			if (this.tool === "eraser") { this.drawing = true; this.eraseAt(pt.x, pt.y); return; }
+			if (this.tool === "eraser") {
+				this.drawing = true;
+				this.eraseSnap = this.doc.strokes;
+				this.eraseAt(pt.x, pt.y);
+				return;
+			}
 			if (this.tool === "lasso") {
 				// The lasso tool always draws a new ring; otherwise a selected outer
 				// region would make it impossible to draw one inside it
@@ -675,7 +788,14 @@ export class HandwritingView extends TextFileView {
 				if (!this.plugin.settings.allowFinger) return;
 			}
 
-			if (!this.drawing) return;
+			if (!this.drawing) {
+				// Hovering with a pen or mouse still previews the eraser ring
+				if (this.tool === "eraser" && e.pointerType !== "touch") {
+					this.eraserAt = this.toPage(e);
+					this.redrawLive();
+				}
+				return;
+			}
 			e.preventDefault();
 			if (this.tool === "eraser") { const p = this.toPage(e); this.eraseAt(p.x, p.y); return; }
 
@@ -741,6 +861,18 @@ export class HandwritingView extends TextFileView {
 
 			if (!this.drawing) return;
 			this.drawing = false;
+			if (this.tool === "eraser") {
+				const snap = this.eraseSnap;
+				this.eraseSnap = null;
+				this.eraserAt = null;
+				this.redrawLive();
+				// One erase gesture is one undo step
+				if (snap && snap !== this.doc.strokes) {
+					this.undoStack.push({ kind: "strokes-set", before: snap });
+					this.requestSave();
+				}
+				return;
+			}
 			if (this.tool === "lasso") { this.finishLasso(); return; }
 			if (this.cur && this.cur.pts.length) {
 				this.doc.strokes.push(this.cur);
@@ -942,18 +1074,33 @@ export class HandwritingView extends TextFileView {
 	}
 
 	private eraseAt(x: number, y: number) {
-		const removed: { index: number; stroke: Stroke }[] = [];
-		for (let i = this.doc.strokes.length - 1; i >= 0; i--) {
-			if (hitStroke(this.doc.strokes[i], x, y, 6)) {
-				removed.push({ index: i, stroke: this.doc.strokes[i] });
-				this.doc.strokes.splice(i, 1);
+		this.eraserAt = { x, y };
+		const r = this.plugin.settings.eraserSize;
+		const before = this.doc.strokes;
+		// Only strokes whose bounds meet the eraser circle can be affected
+		const near = (st: Stroke) => {
+			const b = bboxOf(st);
+			return b.x0 - r <= x && x <= b.x1 + r && b.y0 - r <= y && y <= b.y1 + r;
+		};
+		let after: Stroke[];
+		if (this.plugin.settings.eraserMode === "precise") {
+			after = [];
+			let changed = false;
+			for (const st of before) {
+				if (!near(st)) { after.push(st); continue; }
+				const parts = erasePrecise([st], x, y, r);
+				if (parts.length === 1 && parts[0] === st) { after.push(st); continue; }
+				changed = true;
+				after.push(...parts);
 			}
+			if (!changed) { this.redrawLive(); return; }
+		} else {
+			after = before.filter((st) => !(near(st) && hitStroke(st, x, y, r)));
+			if (after.length === before.length) { this.redrawLive(); return; }
 		}
-		if (!removed.length) return;
-		this.undoStack.push({ kind: "stroke-del", items: removed });
+		this.doc.strokes = after;
 		this.recountPages();
 		this.redrawAll();
-		this.requestSave();
 	}
 
 	/* ============ Lasso to named region ============ */
@@ -1173,6 +1320,7 @@ export class HandwritingView extends TextFileView {
 		switch (e.kind) {
 			case "stroke-add": this.doc.strokes.splice(e.index, 1); break;
 			case "stroke-del": for (const it of [...e.items].reverse()) this.doc.strokes.splice(it.index, 0, it.stroke); break;
+			case "strokes-set": this.doc.strokes = e.before; break;
 			case "item-add": this.doc.items = this.doc.items.filter((x) => x.id !== e.id); break;
 			case "item-del": this.doc.items.splice(e.index, 0, e.item); break;
 			case "region-add": this.doc.regions = this.doc.regions.filter((x) => x.id !== e.id); break;
@@ -1209,7 +1357,6 @@ export class HandwritingView extends TextFileView {
 			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
 			"代码版本 / manifest": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
 			"笔宽档位 / 三档": `${this.sizeIdx} / [${this.sizes.join(", ")}]`,
-			"笔宽浮层": this.popInfo,
 			"窄屏模式": String(this.narrow),
 			"上次点击判定": this.lastHitInfo,
 			"上次手指按下": this.lastTouchInfo,
@@ -1228,18 +1375,24 @@ export class HandwritingView extends TextFileView {
 		};
 	}
 
-	refresh() { this.resize(); }
+	refresh() { this.syncCtx?.(); this.resize(); }
 }
 
 /** Stroke bounding box, cached on the stroke, used to cull ink outside the
  *  viewport in a multi-page document. */
-const bboxCache = new WeakMap<Stroke, { y0: number; y1: number }>();
+const bboxCache = new WeakMap<Stroke, { x0: number; x1: number; y0: number; y1: number }>();
 function bboxOf(st: Stroke) {
 	let b = bboxCache.get(st);
 	if (b && (st as unknown as { _n?: number })._n === st.pts.length) return b;
-	let y0 = Infinity, y1 = -Infinity;
-	for (const p of st.pts) { if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y; }
-	b = { y0: isFinite(y0) ? y0 : 0, y1: isFinite(y1) ? y1 : 0 };
+	let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+	for (const p of st.pts) {
+		if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+		if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
+	}
+	b = {
+		x0: isFinite(x0) ? x0 : 0, x1: isFinite(x1) ? x1 : 0,
+		y0: isFinite(y0) ? y0 : 0, y1: isFinite(y1) ? y1 : 0,
+	};
 	bboxCache.set(st, b);
 	(st as unknown as { _n?: number })._n = st.pts.length;
 	return b;

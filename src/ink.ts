@@ -213,6 +213,30 @@ function disc(cx: CanvasRenderingContext2D, p: { x: number; y: number; r: number
 	cx.arc(p.x, p.y, p.r, 0, TAU);
 }
 
+/** Precise erase: drop the samples under the eraser and split what is left into
+ *  separate strokes, instead of removing the whole stroke. Returns a new array;
+ *  strokes that were not touched are passed through by reference, so the caller
+ *  can tell whether anything changed by identity. */
+export function erasePrecise(strokes: Stroke[], x: number, y: number, r: number): Stroke[] {
+	const out: Stroke[] = [];
+	for (const st of strokes) {
+		let hit = false;
+		const segs: Pt[][] = [];
+		let cur: Pt[] = [];
+		for (const p of st.pts) {
+			if (Math.hypot(p.x - x, p.y - y) <= r) {
+				hit = true;
+				if (cur.length >= 2) segs.push(cur);
+				cur = [];
+			} else cur.push(p);
+		}
+		if (cur.length >= 2) segs.push(cur);
+		if (!hit) { out.push(st); continue; }
+		for (const pts of segs) out.push({ c: st.c, s: st.s, pts });
+	}
+	return out;
+}
+
 /** Hit test for the eraser: is this point on the stroke? */
 export function hitStroke(stroke: Stroke, x: number, y: number, radius: number): boolean {
 	const r = radius + stroke.s / 2;
