@@ -1,4 +1,4 @@
-import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf } from "obsidian";
+import { App, MarkdownView, Menu, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TFolder, WorkspaceLeaf } from "obsidian";
 import { HandwritingView, VIEW_TYPE } from "./view";
 import { emptyDoc, isHandwritingData, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
@@ -112,6 +112,15 @@ export default class HandwritingPlugin extends Plugin {
 			callback: () => new DiagModal(this.app, this.collectDiagnostics()).open(),
 		});
 
+		// Right-click a folder on desktop, long-press it on mobile
+		this.registerEvent(this.app.workspace.on("file-menu", (menu: Menu, f: TAbstractFile) => {
+			if (!(f instanceof TFolder)) return;
+			menu.addItem((item) => item
+				.setTitle(t("cmd.newNoteHere"))
+				.setIcon("pen-tool")
+				.onClick(() => this.createNote(f)));
+		}));
+
 		this.addRibbonIcon("pen-tool", t("cmd.newNote"), () => this.createNote());
 		this.addSettingTab(new HandwritingSettingTab(this.app, this));
 	}
@@ -177,13 +186,16 @@ export default class HandwritingPlugin extends Plugin {
 
 	/* ============ Creating notes ============ */
 
-	private async createNote() {
+	/** @param into  the folder to create in. Without one, Obsidian's own
+	 *  "Default location for new notes" decides. */
+	private async createNote(into?: TFolder) {
 		// Obsidian already asks where new notes go, under Files and links ->
 		// "Default location for new notes". Following that setting means the
 		// answer to "where did this end up" is one the user has already given,
-		// and is visible in a place they can change.
+		// and is visible in a place they can change. Picking a folder in the
+		// file explorer says it outright, and wins.
 		const active = this.app.workspace.getActiveFile();
-		const parent = this.app.fileManager.getNewFileParent(active?.path ?? "");
+		const parent = into ?? this.app.fileManager.getNewFileParent(active?.path ?? "");
 		const dir = parent.isRoot() ? "" : parent.path + "/";
 
 		const d = new Date();
