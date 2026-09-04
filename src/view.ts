@@ -66,6 +66,8 @@ export class HandwritingView extends TextFileView {
 	private tap: { x: number; y: number; finger: boolean } | null = null;
 	private lpTimer = 0;
 	private panMoved = false;
+	/** 手指按在了某个已选中的圈上，等移动超过死区再真正开始拖 */
+	private fingerOn: { id: string; x: number; y: number } | null = null;
 
 	/* 视口：缩放 + 平移。笔迹坐标始终是内容单位，跟屏幕无关。 */
 	private zoom = 1;
@@ -432,66 +434,72 @@ export class HandwritingView extends TextFileView {
 
 	/* ================= 输入 ================= */
 
+	/* 职责划分：
+	 *   笔    —— 只写字。不选中、不拖动、不长按弹菜单。
+	 *            我们的套索是**持久存在的命名区域**，不是一次性选区，
+	 *            拿笔在圈里点几个点是常态操作，不能因此就把圈选中了。
+	 *   手指  —— 只操作。轻点选中/取消、拖已选中的圈、平移、双指缩放。永远不画。
+	 *   鼠标  —— 桌面端没有手指，所以两样都干。
+	 */
 	private bindPointer() {
 		const el = this.live;
 
 		this.registerDomEvent(el, "pointerdown", (e: PointerEvent) => {
-			// 笔写字，手指滚动 —— 跟 Notability 一样。开了「允许手指绘制」时，
-			// 单指画、双指滚缩。
 			const finger = e.pointerType === "touch";
-			// 笔已经落下时，手掌/手指一律无视 —— 否则写字时手掌搭上去页面就滚了
-			if (finger && this.drawing && !this.plugin.settings.allowFinger) return;
-			if (finger) {
+
+			if (finger && !this.plugin.settings.allowFinger) {
+				// 笔已经落下时，手掌一律无视 —— 否则写字时手掌搭上去页面就滚了
+				if (this.drawing) return;
 				this.stopGlide();
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				el.setPointerCapture(e.pointerId);
-				if (this.touches.size >= 2) { this.abortStroke(); this.panFrom = null; return; }
-				if (!this.plugin.settings.allowFinger) {
+				if (this.touches.size >= 2) { this.panFrom = null; this.fingerOn = null; return; }
+
+				const p = this.toPage(e);
+				this.tap = { x: e.clientX, y: e.clientY, finger: true };
+				this.armLongPress(p.x, p.y, true);
+
+				// 按在已选中的圈上 -> 准备拖它，否则准备平移。
+				// 两者都要等移动超过死区才真正开始，这样轻点不会被误判成拖动。
+				const hit = this.regionAt(p.x, p.y);
+				if (hit && hit.id === this.selRegion) {
+					this.fingerOn = { id: hit.id, x: e.clientX, y: e.clientY };
+					this.panFrom = null;
+				} else {
+					this.fingerOn = null;
 					this.panFrom = { x: e.clientX, y: e.clientY };
 					this.velSamples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
 					this.panMoved = false;
-					// 手指不画画，所以轻点和长按都能安全地拿来操作区域
-					this.tap = { x: e.clientX, y: e.clientY, finger: true };
-					const p = this.toPage(e);
-					this.armLongPress(p.x, p.y, true);
-					return;
 				}
+				return;
 			}
+
+			e.preventDefault();
 			// 笔落下时接管一切：丢掉正在进行的手指平移
 			if (!finger) { this.stopGlide(); this.touches.clear(); this.panFrom = null; this.pinch = null; }
-			e.preventDefault();
 			el.setPointerCapture(e.pointerId);
+			const pt = this.toPage(e);
+
+			if (this.tool === "eraser") { this.drawing = true; this.eraseAt(pt.x, pt.y); return; }
+			if (this.tool === "lasso") {
+				// 套索工具下永远是画新圈 —— 否则外圈选中时就没法在它内部再圈一个
+				this.drawing = true;
+				this.lastT = e.timeStamp;
+				this.lasso = [[pt.x, pt.y]];
+				this.schedule();
+				return;
+			}
+
+			// 鼠标兼任"手指"：可以轻点选中、可以拖已选中的圈。笔不行。
+			if (e.pointerType !== "pen") {
+				this.tap = { x: e.clientX, y: e.clientY, finger: false };
+				const hit = this.regionAt(pt.x, pt.y);
+				if (hit && hit.id === this.selRegion) { this.startRegionDrag(hit.id, pt.x, pt.y); return; }
+			}
+
 			this.drawing = true;
 			this.lastT = e.timeStamp;
 			this.evtStamps.length = 0;
-			const pt = this.toPage(e);
-
-			if (this.tool === "eraser") { this.eraseAt(pt.x, pt.y); return; }
-
-			// 笔也支持轻点选中：按下时先存疑，动了才算笔画，没动就是点击
-			this.tap = { x: e.clientX, y: e.clientY, finger: false };
-			// 笔的长按只在"已经选中"时才响应，避免写字时笔停顿一下就弹菜单
-			this.armLongPress(pt.x, pt.y,
-				!!this.selRegion && !!this.doc.regions.find(
-					(r) => r.id === this.selRegion && pointInPoly(r.path, pt.x, pt.y)));
-
-			// 先按命中规则算出"按在哪个圈上"，不能直接拿当前选中的那个去做包含判断 ——
-			// 内圈也落在外圈内部，那样外圈会把点内圈的操作截胡，命中规则根本跑不到。
-			const hit = this.regionAt(pt.x, pt.y);
-
-			// 套索工具下永远是画新圈，不拖动 —— 否则外圈选中时就没法在它内部再圈一个
-			if (this.tool === "lasso") { this.lasso = [[pt.x, pt.y]]; this.schedule(); return; }
-
-			// 按在的正好是已选中的那个圈：拖它，不画画
-			if (hit && hit.id === this.selRegion) {
-				this.drawing = false;
-				this.strokesInRegionBefore = this.doc.strokes
-					.map((st, i) => (strokeInRegion(st, hit) ? i : -1))
-					.filter((i) => i >= 0);
-				this.beginRegionDrag(hit, pt.x, pt.y);
-				return;
-			}
-			// 其它情况照常走：动了就是笔画，没动就是轻点（抬手时由 handleTap 决定选谁）
 			this.cur = { c: this.color, s: this.size, pts: [pt] };
 			this.schedule();
 		});
@@ -501,9 +509,35 @@ export class HandwritingView extends TextFileView {
 				this.tap = null;
 				this.clearLongPress();
 			}
+
+			// 拖动区域（手指和鼠标共用这一段，所以放在触摸分支之前）
+			if (this.regionDrag) {
+				e.preventDefault();
+				const g = this.doc.regions.find((r) => r.id === this.regionDrag!.id);
+				if (!g) return;
+				const p = this.toPage(e);
+				const dx = p.x - this.regionDrag.ox, dy = p.y - this.regionDrag.oy;
+				if (Math.abs(dx) + Math.abs(dy) > 1.5) this.regionDrag.moved = true;
+				this.moveRegion(g, dx, dy);
+				this.regionDrag.dx += dx; this.regionDrag.dy += dy;
+				this.regionDrag.ox = p.x; this.regionDrag.oy = p.y;
+				this.redrawAll();
+				this.rebuildOverlay();
+				return;
+			}
+
 			if (this.touches.has(e.pointerId)) {
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				if (this.touches.size >= 2) { this.handlePinch(); return; }
+
+				// 手指按在已选中的圈上，移动超过死区就开始拖它
+				if (this.fingerOn) {
+					if (Math.hypot(e.clientX - this.fingerOn.x, e.clientY - this.fingerOn.y) < 4) return;
+					const p = this.toPage(e);
+					this.startRegionDrag(this.fingerOn.id, p.x, p.y);
+					this.fingerOn = null;
+					return;
+				}
 				if (this.panFrom) {
 					// 死区：没超过这点距离就不当平移，否则手指微抖会把画面挪走
 					if (!this.panMoved) {
@@ -520,20 +554,7 @@ export class HandwritingView extends TextFileView {
 				}
 				if (!this.plugin.settings.allowFinger) return;
 			}
-			if (this.regionDrag) {
-				e.preventDefault();
-				const g = this.doc.regions.find((r) => r.id === this.regionDrag!.id);
-				if (!g) return;
-				const p = this.toPage(e);
-				const dx = p.x - this.regionDrag.ox, dy = p.y - this.regionDrag.oy;
-				if (Math.abs(dx) + Math.abs(dy) > 1.5) this.regionDrag.moved = true;
-				this.moveRegion(g, dx, dy);
-				this.regionDrag.dx += dx; this.regionDrag.dy += dy;
-				this.regionDrag.ox = p.x; this.regionDrag.oy = p.y;
-				this.redrawAll();
-				this.rebuildOverlay();
-				return;
-			}
+
 			if (!this.drawing) return;
 			e.preventDefault();
 			if (this.tool === "eraser") { const p = this.toPage(e); this.eraseAt(p.x, p.y); return; }
@@ -562,47 +583,41 @@ export class HandwritingView extends TextFileView {
 			this.clearLongPress();
 			const wasTap = this.tap;
 			this.tap = null;
-			if (wasTap) {
-				const p = this.toPage(e);
-				// 拖动区域中途松手不算轻点
-				if (!this.regionDrag || !this.regionDrag.moved) {
-					const before = this.selRegion;
-					this.handleTap(p.x, p.y);
-					// 点在圈上：丢掉那个"点"笔画，也不要惯性滚动
-					if (this.selRegion || before) {
-						this.touches.delete(e.pointerId);
-						this.panFrom = null;
-						this.pinch = null;
-						this.regionDrag = null;
-						this.drawing = false;
-						this.cur = null;
-						this.redrawLive();
-						return;
-					}
-				}
-			}
-			if (this.touches.delete(e.pointerId)) {
+			this.fingerOn = null;
+
+			const wasFinger = this.touches.delete(e.pointerId);
+			if (wasFinger) {
 				if (this.touches.size < 2) this.pinch = null;
-				if (this.touches.size === 1) {
-					const t = [...this.touches.values()][0];
-					this.panFrom = { x: t.x, y: t.y };
-				} else if (this.touches.size === 0) {
-					this.panFrom = null;
-					this.startGlide();
-				}
-				if (!this.plugin.settings.allowFinger) return;
+				this.panFrom = this.touches.size === 1 ? { ...[...this.touches.values()][0] } : null;
 			}
+
+			// 区域拖动收尾
 			if (this.regionDrag) {
 				const d = this.regionDrag;
 				this.regionDrag = null;
 				if (d.moved) {
-					this.undoStack.push({ kind: "region-move", id: d.id, dx: d.dx, dy: d.dy,
-						strokes: [...this.strokesInRegionBefore] });
+					this.undoStack.push({
+						kind: "region-move", id: d.id, dx: d.dx, dy: d.dy,
+						strokes: [...this.strokesInRegionBefore],
+					});
 					this.recountPages();
 					this.requestSave();
 				}
 				return;
 			}
+
+			// 轻点：选中 / 取消选中。笔永远走不到这里，它从不设置 this.tap
+			if (wasTap) {
+				const p = this.toPage(e);
+				this.handleTap(p.x, p.y);
+				return;
+			}
+
+			if (wasFinger) {
+				if (this.touches.size === 0 && this.panMoved) this.startGlide();
+				if (!this.plugin.settings.allowFinger) return;
+			}
+
 			if (!this.drawing) return;
 			this.drawing = false;
 			if (this.tool === "lasso") { this.finishLasso(); return; }
@@ -619,8 +634,8 @@ export class HandwritingView extends TextFileView {
 		};
 		this.registerDomEvent(el, "pointerup", end);
 		this.registerDomEvent(el, "pointercancel", end);
-		this.registerDomEvent(el, "touchstart", (e: TouchEvent) => e.preventDefault());
-		this.registerDomEvent(el, "contextmenu", (e: Event) => e.preventDefault());
+		this.registerDomEvent(el, "touchstart", (ev: TouchEvent) => ev.preventDefault());
+		this.registerDomEvent(el, "contextmenu", (ev: Event) => ev.preventDefault());
 
 		// 桌面端：滚轮滚动，Ctrl/⌘ + 滚轮以指针为中心缩放
 		this.registerDomEvent(el, "wheel", (e: WheelEvent) => {
@@ -702,8 +717,16 @@ export class HandwritingView extends TextFileView {
 		if (this.lpTimer) { window.clearTimeout(this.lpTimer); this.lpTimer = 0; }
 	}
 
-	private beginRegionDrag(g: Region, x: number, y: number) {
-		this.regionDrag = { id: g.id, ox: x, oy: y, dx: 0, dy: 0, moved: false };
+	/** 开始拖动某个区域（手指和鼠标共用） */
+	private startRegionDrag(id: string, x: number, y: number) {
+		const g = this.doc.regions.find((r) => r.id === id);
+		if (!g) return;
+		this.drawing = false;
+		this.cur = null;
+		this.strokesInRegionBefore = this.doc.strokes
+			.map((st, i) => (strokeInRegion(st, g) ? i : -1))
+			.filter((i) => i >= 0);
+		this.regionDrag = { id, ox: x, oy: y, dx: 0, dy: 0, moved: false };
 	}
 
 	/** 拖动区域时圈里的笔迹跟着一起走 —— 否则圈移开之后框住的就是别的内容，
@@ -753,14 +776,6 @@ export class HandwritingView extends TextFileView {
 			this.glideRaf = requestAnimationFrame(step);
 		};
 		this.glideRaf = requestAnimationFrame(step);
-	}
-
-	private abortStroke() {
-		if (!this.drawing) return;
-		this.drawing = false;
-		this.cur = null;
-		this.lasso = null;
-		this.redrawLive();
 	}
 
 	/** 双指缩放：让捏合中点下的那个内容点保持不动 */
