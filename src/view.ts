@@ -1,7 +1,7 @@
 import { Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip,
+	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, strokeInRegion, pointInPoly, polyArea, polyBounds, predictTip,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -33,7 +33,8 @@ type UndoEntry =
 	| { kind: "item-del"; index: number; item: LinkItem }
 	| { kind: "region-add"; id: string }
 	| { kind: "region-del"; index: number; region: Region }
-	| { kind: "region-move"; id: string; dx: number; dy: number };
+	| { kind: "region-move"; id: string; dx: number; dy: number }
+	| { kind: "sel-move"; strokes: Stroke[]; dx: number; dy: number };
 
 export class HandwritingView extends TextFileView {
 	private plugin: HandwritingPlugin;
@@ -52,6 +53,9 @@ export class HandwritingView extends TextFileView {
 	private eraserAt: { x: number; y: number } | null = null;
 	/** Strokes as they were when an erase gesture began, so one drag is one undo */
 	private eraseSnap: Stroke[] | null = null;
+	/** Transient lasso selection: a ring plus the strokes it caught. Never saved. */
+	private sel: { path: [number, number][]; strokes: Stroke[]; showOpts: boolean } | null = null;
+	private selDrag: { ox: number; oy: number; dx: number; dy: number; moved: boolean } | null = null;
 	private ro?: ResizeObserver;
 	private narrow: boolean | null = null;
 	private seps: HTMLElement[] = [];
@@ -214,10 +218,10 @@ export class HandwritingView extends TextFileView {
 		};
 		const sep = () => this.seps.push(bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } }));
 
-		const penBtn = btn("pen", "笔", () => { this.tool = "pen"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
-		const eraBtn = btn("eraser", "橡皮", () => { this.tool = "eraser"; sync(); this.buildContextBar(); });
+		const penBtn = btn("pen", "笔", () => { this.tool = "pen"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
+		const eraBtn = btn("eraser", "橡皮", () => { this.tool = "eraser"; this.clearSelection(); sync(); this.buildContextBar(); });
 		const lasBtn = btn("lasso", "套索：圈选内容", () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
-		const wikiBtn = btn("lasso", "Wiki 套索：圈一块内容并命名，供 [[笔记#区域]] 引用", () => { this.tool = "wiki"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
+		const wikiBtn = btn("lasso", "Wiki 套索：圈一块内容并命名，供 [[笔记#区域]] 引用", () => { this.tool = "wiki"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
 		wikiBtn.createDiv({ text: "Wiki", attr: { style: S.btnBadge } });
 		sep();
 
@@ -630,6 +634,18 @@ export class HandwritingView extends TextFileView {
 			drawStroke(this.lctx, s, this.opts(), false);
 		}
 		if (this.lasso && this.lasso.length > 1) this.drawRegionOutline(this.lctx, this.lasso, "drawing");
+		if (this.sel) {
+			const cx = this.lctx;
+			cx.save();
+			cx.setLineDash([8 / this.scale, 5 / this.scale]);
+			cx.lineWidth = 2 / this.scale;
+			cx.strokeStyle = "rgba(60,60,60,.85)";
+			cx.fillStyle = "rgba(120,120,120,.10)";
+			pathToCanvas(cx, this.sel.path);
+			cx.fill();
+			cx.stroke();
+			cx.restore();
+		}
 		// Eraser preview: how big the eraser is and where it currently sits
 		if (this.tool === "eraser" && this.eraserAt) {
 			const cx = this.lctx, r = this.plugin.settings.eraserSize;
@@ -685,6 +701,11 @@ export class HandwritingView extends TextFileView {
 				// Pressing on any region prepares a drag, otherwise a pan. Selecting
 				// first is deliberately not required. Either way the gesture only
 				// starts past the dead zone, so a tap is never mistaken for a drag.
+				if (this.sel && pointInPoly(this.sel.path, p.x, p.y)) {
+					this.fingerOn = { id: "__sel__", x: e.clientX, y: e.clientY };
+					this.panFrom = null;
+					return;
+				}
 				const hit = this.regionAt(p.x, p.y);
 				this.lastTouchInfo = hit
 					? `按在「${hit.name}」上，待拖动`
@@ -718,6 +739,7 @@ export class HandwritingView extends TextFileView {
 				// outer region would make it impossible to draw one inside it
 				this.drawing = true;
 				this.lastT = e.timeStamp;
+				this.clearSelection();   // a new ring replaces the previous selection
 				this.lasso = [[pt.x, pt.y]];
 				this.schedule();
 				return;
@@ -742,6 +764,19 @@ export class HandwritingView extends TextFileView {
 			if (this.tap && Math.hypot(e.clientX - this.tap.x, e.clientY - this.tap.y) > (this.tap.finger ? 16 : 6)) {
 				this.tap = null;
 				this.clearLongPress();
+			}
+
+			if (this.selDrag && this.sel) {
+				e.preventDefault();
+				const p = this.toPage(e);
+				const dx = p.x - this.selDrag.ox, dy = p.y - this.selDrag.oy;
+				if (Math.abs(dx) + Math.abs(dy) > 1.5) this.selDrag.moved = true;
+				this.moveSelection(dx, dy);
+				this.selDrag.dx += dx; this.selDrag.dy += dy;
+				this.selDrag.ox = p.x; this.selDrag.oy = p.y;
+				this.redrawAll();
+				this.rebuildOverlay();
+				return;
 			}
 
 			// Region dragging, shared by finger and mouse, hence before the touch branch
@@ -770,6 +805,10 @@ export class HandwritingView extends TextFileView {
 					const p = this.toPage(e);
 					const id = this.fingerOn.id;
 					this.fingerOn = null;
+					if (id === "__sel__") {
+						this.selDrag = { ox: p.x, oy: p.y, dx: 0, dy: 0, moved: false };
+						return;
+					}
 					if (this.selRegion !== id) this.select(id);   // selecting what you drag gives feedback
 					this.startRegionDrag(id, p.x, p.y);
 					this.lastTouchInfo += " -> 已开始拖动";
@@ -835,6 +874,17 @@ export class HandwritingView extends TextFileView {
 			if (wasFinger) {
 				if (this.touches.size < 2) this.pinch = null;
 				this.panFrom = this.touches.size === 1 ? { ...[...this.touches.values()][0] } : null;
+			}
+
+			if (this.selDrag) {
+				const d = this.selDrag;
+				this.selDrag = null;
+				if (d.moved && this.sel) {
+					this.undoStack.push({ kind: "sel-move", strokes: [...this.sel.strokes], dx: d.dx, dy: d.dy });
+					this.recountPages();
+					this.requestSave();
+				}
+				return;
 			}
 
 			// Finish a region drag
@@ -953,6 +1003,14 @@ export class HandwritingView extends TextFileView {
 	/** Tap: selects the region under it (ring or tag alike), clears on empty space.
 	 *  The ring and its tag are one thing. */
 	private handleTap(x: number, y: number) {
+		if (this.sel) {
+			if (pointInPoly(this.sel.path, x, y)) {
+				this.sel.showOpts = !this.sel.showOpts;
+				this.rebuildOverlay();
+				return;
+			}
+			this.clearSelection();
+		}
 		const hit = this.regionAt(x, y);
 		this.select(hit ? hit.id : null);
 	}
@@ -1099,14 +1157,73 @@ export class HandwritingView extends TextFileView {
 		this.redrawAll();
 	}
 
+	/* ============ Plain lasso selection ============ */
+
+	/** Turn the ring just drawn into a selection. Membership is by intersection:
+	 *  a stroke only partly inside still belongs to it, so deleting takes the
+	 *  whole stroke rather than cutting it. Unlike a Wiki region this is
+	 *  transient -- it is never named and never saved. */
+	private finishSelection(path: [number, number][]) {
+		const region: Region = { id: "sel", name: "", path };
+		const strokes = this.doc.strokes.filter((st) => strokeInRegion(st, region));
+		this.sel = strokes.length ? { path, strokes, showOpts: false } : null;
+		this.redrawLive();
+		this.rebuildOverlay();
+	}
+
+	private clearSelection() {
+		if (!this.sel) return;
+		this.sel = null;
+		this.redrawLive();
+		this.rebuildOverlay();
+	}
+
+	private moveSelection(dx: number, dy: number) {
+		if (!this.sel) return;
+		for (const pt of this.sel.path) { pt[0] += dx; pt[1] += dy; }
+		for (const st of this.sel.strokes) {
+			for (const p of st.pts) { p.x += dx; p.y += dy; }
+			dirtyBox(st);   // point count is unchanged, so the cached bounds must be dropped
+		}
+	}
+
+	private deleteSelection() {
+		if (!this.sel) return;
+		const before = this.doc.strokes;
+		const gone = new Set(this.sel.strokes);
+		this.doc.strokes = before.filter((st) => !gone.has(st));
+		this.undoStack.push({ kind: "strokes-set", before });
+		this.sel = null;
+		this.recountPages();
+		this.redrawAll();
+		this.rebuildOverlay();
+		this.requestSave();
+		new Notice(`已删除 ${gone.size} 条笔迹`);
+	}
+
+	/** Delete button, at the selection's top-right corner */
+	private renderSelectionBar() {
+		if (!this.sel || !this.sel.showOpts) return;
+		const box = polyBounds(this.sel.path);
+		const bar = this.overlay.createDiv({ attr: { style: S.regionBar } });
+		bar.style.left = box.x + box.w + "px";
+		bar.style.top = box.y + "px";
+		this.counterScaled.push(bar);
+		const b = bar.createEl("button", { attr: { "aria-label": "删除圈中的笔迹", title: "删除圈中的笔迹", style: S.regionBtn } });
+		drawIcon(b, "trash", 16);
+		b.addEventListener("pointerdown", (e) => e.stopPropagation());
+		b.addEventListener("click", (e) => { e.stopPropagation(); this.deleteSelection(); });
+	}
+
 	/* ============ Lasso to named region ============ */
 
 	private finishLasso() {
 		const path = this.lasso ?? [];
 		if (this.tool === "lasso") {
-			// The plain lasso has no behaviour yet; the ring simply disappears
 			this.lasso = null;
-			this.redrawLive();
+			const box0 = polyBounds(path);
+			if (path.length < 8 || box0.w < 12 || box0.h < 12) { this.clearSelection(); this.redrawLive(); return; }
+			this.finishSelection(path);
 			return;
 		}
 		this.lasso = null;
@@ -1187,6 +1304,7 @@ export class HandwritingView extends TextFileView {
 		this.overlay.empty();
 		this.counterScaled = [];
 		for (const g of this.doc.regions) this.renderRegionTag(g);
+		this.renderSelectionBar();
 		for (const it of this.doc.items) this.renderItem(it);
 		this.syncOverlayTransform();
 	}
@@ -1327,6 +1445,12 @@ export class HandwritingView extends TextFileView {
 			case "item-del": this.doc.items.splice(e.index, 0, e.item); break;
 			case "region-add": this.doc.regions = this.doc.regions.filter((x) => x.id !== e.id); break;
 			case "region-del": this.doc.regions.splice(e.index, 0, e.region); break;
+			case "sel-move":
+				for (const st of e.strokes) {
+					for (const p of st.pts) { p.x -= e.dx; p.y -= e.dy; }
+					dirtyBox(st);
+				}
+				break;
 			case "region-move": {
 				const g = this.doc.regions.find((r) => r.id === e.id);
 				if (g) for (const pt of g.path) { pt[0] -= e.dx; pt[1] -= e.dy; }
@@ -1376,6 +1500,10 @@ export class HandwritingView extends TextFileView {
 
 	refresh() { this.syncCtx?.(); this.resize(); }
 }
+
+/** Drop a stroke's cached bounds. Moving a selection changes coordinates without
+ *  changing the point count, which is what the cache keys on. */
+function dirtyBox(st: Stroke) { (st as unknown as { _n?: number })._n = -1; }
 
 /** Stroke bounding box, cached on the stroke, used to cull ink outside the
  *  viewport in a multi-page document. */
