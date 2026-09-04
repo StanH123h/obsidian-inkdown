@@ -254,6 +254,10 @@ export class HandwritingView extends TextFileView {
 		if (!bar) return;
 		bar.empty();
 		this.syncCtx = null;
+		// Neither lasso has anything to configure, so the whole column goes away
+		// rather than sitting there empty and taking up width.
+		if (this.tool === "lasso" || this.tool === "wiki") { bar.style.display = "none"; return; }
+		bar.style.display = "flex";
 		const vert = !this.narrow;
 
 		const sep = () => bar.createDiv({ attr: { style: vert ? S.sep : S.sepNarrow } });
@@ -313,7 +317,6 @@ export class HandwritingView extends TextFileView {
 			return;
 		}
 
-		// The lasso has nothing to configure yet.
 	}
 
 	/** Segmented control with a pill that slides to the selected option.
