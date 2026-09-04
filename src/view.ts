@@ -475,21 +475,23 @@ export class HandwritingView extends TextFileView {
 				!!this.selRegion && !!this.doc.regions.find(
 					(r) => r.id === this.selRegion && pointInPoly(r.path, pt.x, pt.y)));
 
-			// 已选中的区域：在里面按下就是拖它，不是画画
-			if (this.selRegion) {
-				const cur = this.doc.regions.find((r) => r.id === this.selRegion);
-				if (cur && pointInPoly(cur.path, pt.x, pt.y)) {
-					this.drawing = false;
-					this.strokesInRegionBefore = this.doc.strokes
-						.map((st, i) => (strokeInRegion(st, cur) ? i : -1))
-						.filter((i) => i >= 0);
-					this.beginRegionDrag(cur, pt.x, pt.y);
-					return;
-				}
-				this.select(null);   // 点到别处 -> 取消选中，然后照常画
-			}
+			// 先按命中规则算出"按在哪个圈上"，不能直接拿当前选中的那个去做包含判断 ——
+			// 内圈也落在外圈内部，那样外圈会把点内圈的操作截胡，命中规则根本跑不到。
+			const hit = this.regionAt(pt.x, pt.y);
 
+			// 套索工具下永远是画新圈，不拖动 —— 否则外圈选中时就没法在它内部再圈一个
 			if (this.tool === "lasso") { this.lasso = [[pt.x, pt.y]]; this.schedule(); return; }
+
+			// 按在的正好是已选中的那个圈：拖它，不画画
+			if (hit && hit.id === this.selRegion) {
+				this.drawing = false;
+				this.strokesInRegionBefore = this.doc.strokes
+					.map((st, i) => (strokeInRegion(st, hit) ? i : -1))
+					.filter((i) => i >= 0);
+				this.beginRegionDrag(hit, pt.x, pt.y);
+				return;
+			}
+			// 其它情况照常走：动了就是笔画，没动就是轻点（抬手时由 handleTap 决定选谁）
 			this.cur = { c: this.color, s: this.size, pts: [pt] };
 			this.schedule();
 		});
