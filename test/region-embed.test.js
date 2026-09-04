@@ -40,6 +40,13 @@ console.log('\n裁剪范围就是这个圈自己的包围盒，跟嵌套无关\n
 const b = polyBounds(外圈.path);
 t('外圈的显示范围', [b.x, b.y, b.w, b.h], [100, 100, 300, 200]);
 
-console.log('\n' + (ok ? '全部通过：区域之间彼此不知道对方存在，不存在递归'
+// 设计原则：原生内容渲染，引用不渲染。区域引用的入参只有笔迹和多边形，
+// 画布上的 wiki link 元素（doc.items）从来不参与 —— 结构上就传不进来。
+console.log('\n引用一个圈时，画布上的 wiki link 元素不参与\n');
+const 引用外圈用到的输入 = { strokes, region: 外圈 };
+t('区域引用的输入只有笔迹和多边形，没有 items 这一项',
+  Object.keys(引用外圈用到的输入).sort(), ['region', 'strokes']);
+
+console.log('\n' + (ok ? '全部通过：区域之间彼此不知道对方存在，引用不形成链'
                        : '有用例未通过'));
 process.exit(ok ? 0 : 1);

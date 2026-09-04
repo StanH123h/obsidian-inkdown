@@ -23,6 +23,9 @@ export async function resolveTarget(app: App, target: string, sourcePath: string
 	if (isHandwritingData(raw)) {
 		const doc = parse(raw);
 		if (subpath) {
+			// 只挑笔迹，不看别的圈、也不看画布上的 wiki link 元素。
+			// 设计原则：原生内容渲染，引用不渲染，一层就是一层（见 README）。
+			// 所以区域引用不会形成链、不会循环，也不会因为改了远处某篇笔记而变。
 			const name = subpath.replace(/^#+/, "").trim();
 			// 同名区域取第一个 —— 跟 Obsidian 解析同名标题的行为一致
 			const region: Region | undefined = doc.regions.find((r) => r.name === name);
