@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Pencil 压感测试 v4</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; overflow:hidden; background:#faf9f7;
+              font:13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;
+              -webkit-user-select:none; user-select:none; -webkit-tap-highlight-color:transparent; }
+  #stage { position:fixed; inset:0; }
+  canvas { position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  #hud { position:fixed; top:env(safe-area-inset-top,0); left:0; padding:10px 14px;
+         background:rgba(255,255,255,.92); backdrop-filter:blur(10px);
+         border-bottom-right-radius:12px; font-variant-numeric:tabular-nums;
+         box-shadow:0 2px 12px rgba(0,0,0,.08); pointer-events:none; }
+  #hud b { display:inline-block; width:92px; color:#8a8580; font-weight:400; }
+  #hud .v { color:#1a1a1a; font-weight:600; }
+  #verdict { margin-top:6px; padding-top:6px; border-top:1px solid #eee; font-weight:600; }
+  .ok { color:#1a7f37; } .bad { color:#c0392b; } .wait { color:#8a8580; }
+  #bar { display:inline-block; height:7px; background:#1a1a1a; border-radius:4px; vertical-align:middle; width:0; }
+  #dot { position:fixed; width:9px; height:9px; margin:-4.5px 0 0 -4.5px; border-radius:50%;
+         border:1.5px solid #e74c3c; pointer-events:none; opacity:0; }
+  #panel { position:fixed; left:0; right:0; bottom:0;
+           padding:12px 16px calc(env(safe-area-inset-bottom,0) + 12px);
+           background:rgba(255,255,255,.94); backdrop-filter:blur(10px);
+           box-shadow:0 -2px 16px rgba(0,0,0,.07); display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+  .ctl { display:flex; align-items:center; gap:8px; }
+  .ctl label { color:#8a8580; white-space:nowrap; }
+  .ctl input[type=range] { width:100px; }
+  .ctl output { width:32px; color:#1a1a1a; font-weight:600; font-variant-numeric:tabular-nums; }
+  button { padding:9px 15px; background:#1a1a1a; color:#fff; border:0; border-radius:9px; font-size:14px; }
+  button.off { background:#e8e6e3; color:#5a5550; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="base"></canvas>
+  <canvas id="live"></canvas>
+</div>
+<div id="hud">
+  <div><b>pointerType</b><span class="v" id="ptype">—</span></div>
+  <div><b>pressure</b><span class="v" id="press">—</span> <span id="bar"></span></div>
+  <div><b>tiltX / tiltY</b><span class="v" id="tilt">—</span></div>
+  <div><b>alt/azimuth</b><span class="v" id="alt">—</span></div>
+  <div><b>合并事件数</b><span class="v" id="coal">—</span></div>
+  <div><b>采样率</b><span class="v" id="hz">—</span></div>
+  <div><b>视口 vs 画布</b><span class="v" id="diag">—</span></div>
+  <div><b>本笔点数</b><span class="v" id="np">—</span></div>
+  <div id="verdict" class="wait">用 Apple Pencil 画一笔…</div>
+</div>
+<div id="dot"></div>
+<div id="panel">
+  <div class="ctl"><label>笔宽</label><input type="range" id="size" min="2" max="24" step="1" value="8"><output id="sizeV">8</output></div>
+  <div class="ctl"><label>平滑</label><input type="range" id="smooth" min="0" max="90" step="5" value="55"><output id="smoothV">.55</output></div>
+  <div class="ctl"><label>压感强度</label><input type="range" id="thin" min="0" max="100" step="5" value="70"><output id="thinV">.70</output></div>
+  <button id="mode">① 轮廓填充</button>
+  <button id="taper" class="off">起收笔锋：关</button>
+  <button id="speed" class="off">速度感应</button>
+  <button id="clear">清空</button>
+</div>
+<script>
+const base=document.getElementById('base'), bctx=base.getContext('2d');
+const live=document.getElementById('live'), lctx=live.getContext('2d');
+const dpr = window.devicePixelRatio || 1;
+const $ = id => document.getElementById(id);
+const TAU = Math.PI*2;
+let rect=null, hasPressure=false;
+
+const MODES = ['轮廓填充','盖圆(旧)','折线(最旧)'];
+const opt = { size:8, smooth:.55, thin:.70, mode:0, taper:0, speed:false };
+const TAPERS = ['起收笔锋：关','起收笔锋：轻微','起收笔锋：明显'];
+const TAPER_PX = [0, 3, 10];
+const strokes = [];      // 已完成笔迹：{ raw:[{x,y,p,t}] }
+let cur = null;
+
+/* ================= 尺寸 / 坐标 ================= */
+function syncRect(){ rect = live.getBoundingClientRect(); }
+function resize(){
+  syncRect();
+  // 用画布实际显示尺寸，不用 window.innerWidth/innerHeight（iOS 上前者含工具栏区域）
+  for (const [cv,cx] of [[base,bctx],[live,lctx]]) {
+    cv.width  = Math.round(rect.width  * dpr);
+    cv.height = Math.round(rect.height * dpr);
+    cx.setTransform(dpr,0,0,dpr,0,0);
+    cx.lineCap='round'; cx.lineJoin='round'; cx.fillStyle='#1a1a1a'; cx.strokeStyle='#1a1a1a';
+  }
+  redrawAll();
+  $('diag').textContent = `${innerWidth}x${innerHeight} vs ${Math.round(rect.width)}x${Math.round(rect.height)} @${dpr}x`;
+}
+const toPt = e => ({ x:e.clientX-rect.left, y:e.clientY-rect.top, p:e.pressure, t:e.timeStamp });
+
+/* ================= 从原始点算出带半径的笔迹 =================
+   每次渲染都从 raw 重算，所以拖动滑块能实时改变已画好的笔迹。      */
+function build(stroke){
+  const raw = stroke.raw, out = [];
+  const k = 1 - opt.smooth;
+
+  // 落笔/抬笔瞬间的压力是假的：数字化仪还没读出来，iPad 会报 0 或极小值。
+  // 那不是"你按得轻"，所以直接用第一个/最后一个可信采样回填，而不是拿假笔锋去遮。
+  let head = 0;
+  while (head < raw.length && head < 6 && !(raw[head].p > 0.02)) head++;
+  const pHead = head < raw.length ? raw[head].p : 0.25;
+  let tail = raw.length - 1;
+  while (tail > head && raw.length-1-tail < 6 && !(raw[tail].p > 0.02)) tail--;
+  const pTail = raw[tail] ? raw[tail].p : pHead;
+
+  let prev=null, dist=0;
+  for (let i=0;i<raw.length;i++){
+    const r0 = raw[i];
+    const rawP = i < head ? pHead
+               : i > tail ? pTail
+               : (r0.p > 0 ? r0.p : (prev ? prev.p : pHead));
+    const pt = prev
+      ? { x: prev.x + (r0.x-prev.x)*k, y: prev.y + (r0.y-prev.y)*k, p: prev.p + (rawP-prev.p)*0.35 }
+      : { x: r0.x, y: r0.y, p: rawP };
+    const dt = prev ? Math.max(r0.t - raw[i-1].t, 1) : 16;
+    const step = prev ? Math.hypot(pt.x-prev.x, pt.y-prev.y) : 0;
+    dist += step;
+    pt.d = dist;
+    pt.v = step / dt * 16;                       // px / 帧
+    out.push(pt); prev = pt;
+  }
+  const total = dist;
+  for (const pt of out){
+    let f = pt.p;
+    if (opt.speed){
+      const s = Math.min(pt.v/2.5, 1);
+      f = hasPressure ? f*(1-s*0.35) : 1-s*0.75; // 有压感就微调，没压感就全靠速度
+    }
+    let r = opt.size/2 * (1 - opt.thin*(1-f));
+    const TP = TAPER_PX[opt.taper];
+    if (TP && total > 0){
+      // 关键：笔锋长度最多只占整笔的 15%，否则短笔画（汉字的点、横）会被两头吃成米粒
+      const T = Math.min(TP, total*0.15) || 1;
+      r *= ease(Math.min(pt.d/T, 1));                                   // 起笔
+      if (stroke.done) r *= ease(Math.min((total-pt.d)/T, 1));          // 收笔
+    }
+    pt.r = Math.max(r, 0.2);
+  }
+  return out;
+}
+const ease = t => t*t*(3-2*t);   // smoothstep
+
+/* ================= 渲染 ================= */
+function drawStroke(cx, pts){
+  if (!pts.length) return;
+  if (opt.mode === 2) {                                   // 折线：最原始
+    for (let i=1;i<pts.length;i++){
+      cx.lineWidth = pts[i].r*2;
+      cx.beginPath(); cx.moveTo(pts[i-1].x,pts[i-1].y); cx.lineTo(pts[i].x,pts[i].y); cx.stroke();
+    }
+    return;
+  }
+  if (opt.mode === 1) {                                   // 盖圆：平滑但边缘会毛
+    for (let i=0;i<pts.length;i++){
+      const a=pts[i], b=pts[i+1]; 
+      cx.beginPath(); cx.arc(a.x,a.y,a.r,0,TAU); cx.fill();
+      if (!b) break;
+      const n = Math.ceil(Math.hypot(b.x-a.x,b.y-a.y)/0.8);
+      for (let j=1;j<n;j++){ const t=j/n;
+        cx.beginPath(); cx.arc(a.x+(b.x-a.x)*t, a.y+(b.y-a.y)*t, a.r+(b.r-a.r)*t, 0, TAU); cx.fill(); }
+    }
+    return;
+  }
+  /* ---- 轮廓填充：整条笔迹算成一个闭合路径，只 fill 一次 ----
+     这样边缘只做一次抗锯齿，不会因为几百次 alpha 叠加而发毛。 */
+  if (pts.length === 1){
+    cx.beginPath(); cx.arc(pts[0].x,pts[0].y,pts[0].r,0,TAU); cx.fill(); return;
+  }
+  const L=[], R=[];
+  for (let i=0;i<pts.length;i++){
+    const a = pts[i-1] || pts[i], b = pts[i+1] || pts[i];
+    let dx=b.x-a.x, dy=b.y-a.y;
+    const len = Math.hypot(dx,dy) || 1;
+    const nx=-dy/len, ny=dx/len;                          // 法线
+    L.push({ x:pts[i].x+nx*pts[i].r, y:pts[i].y+ny*pts[i].r });
+    R.push({ x:pts[i].x-nx*pts[i].r, y:pts[i].y-ny*pts[i].r });
+  }
+  const first=pts[0], last=pts[pts.length-1];
+  const Rr = R.slice().reverse();
+  cx.beginPath();
+  cx.moveTo(L[0].x, L[0].y);
+  quadThrough(cx, L);
+  cx.arc(last.x, last.y, last.r,                          // 收笔圆头
+         ang(last, L[L.length-1]), ang(last, R[R.length-1]), true);
+  quadThrough(cx, Rr);
+  cx.arc(first.x, first.y, first.r,                       // 起笔圆头
+         ang(first, Rr[Rr.length-1]), ang(first, L[0]), true);
+  cx.closePath();
+  cx.fill();
+}
+const ang = (c,p) => Math.atan2(p.y-c.y, p.x-c.x);
+function quadThrough(cx, p){                              // 过中点的二次贝塞尔，边界平滑
+  for (let i=1;i<p.length-1;i++)
+    cx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x+p[i+1].x)/2, (p[i].y+p[i+1].y)/2);
+  if (p.length>1) cx.lineTo(p[p.length-1].x, p[p.length-1].y);
+}
+
+function redrawLive(){
+  lctx.clearRect(0,0,rect.width,rect.height);
+  if (cur) drawStroke(lctx, build(cur));
+}
+function redrawAll(){
+  bctx.clearRect(0,0,rect.width,rect.height);
+  lctx.clearRect(0,0,rect.width,rect.height);
+  for (const st of strokes) drawStroke(bctx, build(st));
+  if (cur) drawStroke(lctx, build(cur));
+}
+
+/* ================= 事件 ================= */
+let drawing=false, pending=false, pressures=[], stamps=[];
+const dot=$('dot');
+function frame(){ pending=false; redrawLive(); }
+function schedule(){ if(!pending){ pending=true; requestAnimationFrame(frame); } }
+
+live.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'touch') return;                  // 手掌拒识
+  syncRect(); drawing=true;
+  cur = { raw:[toPt(e)], done:false };
+  live.setPointerCapture(e.pointerId);
+  showDot(e); report(e,1); schedule();
+});
+live.addEventListener('pointermove', e => {
+  if (!drawing) return;
+  const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ev of evs) cur.raw.push(toPt(ev));
+  showDot(e); report(e, evs.length); schedule();
+});
+function end(){
+  if (!drawing) return;
+  drawing=false; cur.done=true;
+  drawStroke(bctx, build(cur));                           // 定稿画到底层
+  lctx.clearRect(0,0,rect.width,rect.height);
+  strokes.push(cur); cur=null; dot.style.opacity=0;
+}
+live.addEventListener('pointerup', end);
+live.addEventListener('pointercancel', end);
+live.addEventListener('touchstart', e => e.preventDefault(), {passive:false});
+live.addEventListener('gesturestart', e => e.preventDefault());
+function showDot(e){ dot.style.left=e.clientX+'px'; dot.style.top=e.clientY+'px'; dot.style.opacity=1; }
+
+function report(e,n){
+  $('ptype').textContent=e.pointerType;
+  $('press').textContent=e.pressure.toFixed(4);
+  $('bar').style.width=(e.pressure*70).toFixed(0)+'px';
+  $('tilt').textContent=`${e.tiltX ?? '—'} / ${e.tiltY ?? '—'}`;
+  $('alt').textContent=(e.altitudeAngle!=null?e.altitudeAngle.toFixed(2):'无')+' / '+(e.azimuthAngle!=null?e.azimuthAngle.toFixed(2):'无');
+  $('coal').textContent=n;
+  $('np').textContent = cur ? cur.raw.length : '—';
+  stamps.push(performance.now()); if(stamps.length>30) stamps.shift();
+  if(stamps.length>5) $('hz').textContent=(1000*(stamps.length-1)/(stamps[stamps.length-1]-stamps[0])).toFixed(0)+' Hz';
+  if(e.pointerType==='pen'){
+    pressures.push(e.pressure);
+    const uniq=new Set(pressures.map(p=>p.toFixed(3))).size;
+    hasPressure = uniq>3;
+    const v=$('verdict');
+    if(hasPressure){ v.className='ok'; v.textContent='✅ 压感是真的（'+uniq+' 个不同值）'; }
+    else { v.className='wait'; v.textContent='用力变化一下…（目前 '+uniq+' 个不同值）'; }
+  } else { const v=$('verdict'); v.className='bad'; v.textContent='⚠️ pointerType = "'+e.pointerType+'"'; }
+}
+
+/* ================= 控件 ================= */
+const bind=(id,key,fmt,scale=1)=>{ const el=$(id),out=$(id+'V');
+  el.addEventListener('input',()=>{ opt[key]=el.value*scale; out.textContent=fmt(opt[key]); redrawAll(); }); };
+bind('size','size', v=>v);
+bind('smooth','smooth', v=>v.toFixed(2).slice(1), .01);
+bind('thin','thin', v=>v.toFixed(2).slice(1), .01);
+$('mode').addEventListener('click',()=>{ opt.mode=(opt.mode+1)%3;
+  $('mode').textContent='①②③'[opt.mode]+' '+MODES[opt.mode];
+  $('mode').className = opt.mode===0 ? '' : 'off'; redrawAll(); });
+$('taper').addEventListener('click',()=>{ opt.taper=(opt.taper+1)%3;
+  $('taper').textContent=TAPERS[opt.taper];
+  $('taper').className=opt.taper?'':'off'; redrawAll(); });
+$('speed').addEventListener('click',()=>{ opt.speed=!opt.speed;
+  $('speed').className=opt.speed?'':'off'; redrawAll(); });
+$('clear').addEventListener('click',()=>{ strokes.length=0; cur=null; redrawAll();
+  pressures=[]; stamps=[]; hasPressure=false;
+  $('verdict').className='wait'; $('verdict').textContent='用 Apple Pencil 画一笔…'; });
+
+resize();
+addEventListener('resize', resize);
+addEventListener('orientationchange',()=>setTimeout(resize,300));
+addEventListener('scroll', syncRect, true);
+if(window.visualViewport){ visualViewport.addEventListener('resize',resize); visualViewport.addEventListener('scroll',syncRect); }
+</script>
+</body>
+</html>
