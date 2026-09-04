@@ -195,9 +195,17 @@ export const ICONS = {
 		"M4 20h16",
 		"M9.5 16.5L4.8 11.8a1.5 1.5 0 0 1 0-2.1l6-6a1.5 1.5 0 0 1 2.1 0l4.4 4.4a1.5 1.5 0 0 1 0 2.1L11.6 16.5z",
 	],
+	/* Lasso, matching Lucide's icon of the same name (ISC). Three parts, and the
+	 * first version here got all three wrong, which is why it read as a magnifying
+	 * glass: the loop is a flattened ellipse seen in perspective rather than a
+	 * circle, it is an open arc broken at the lower left where the rope descends
+	 * rather than a closed ring, and the small circle is the honda knot -- the
+	 * sliding knot that makes a rope a lasso, and the element that actually carries
+	 * the meaning. A ring with a stalk is a magnifying glass. */
 	lasso: [
-		"M12 4.5c4.4 0 8 2.5 8 5.6s-3.6 5.6-8 5.6-8-2.5-8-5.6 3.6-5.6 8-5.6z",
-		"M9 15.5c-.3 1.6-.1 2.9.7 3.6a2 2 0 0 0 3-.4",
+		"M3.704 14.467a10 8 0 1 1 3.115 2.375",
+		"M7 22a5 5 0 0 1-2-3.994",
+		"M3 16a2 2 0 1 0 4 0a2 2 0 1 0-4 0",
 	],
 	link: [
 		"M10.2 13.8a4.5 4.5 0 0 0 6.7.5l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4l-1.5 1.5",
