@@ -60,6 +60,11 @@ export class HandwritingView extends TextFileView {
 	private regionDrag: { id: string; ox: number; oy: number; dx: number; dy: number; moved: boolean } | null = null;
 	/** 需要做反向缩放的浮动 UI（放大画布时按钮不该跟着变大） */
 	private counterScaled: HTMLElement[] = [];
+	/** 选项条是否展开。只有长按才展开，普通点击只负责选中。 */
+	private showOpts = false;
+	/** 轻点判定：按下时记录，移动超过阈值就作废（那是笔画或平移，不是点击） */
+	private tap: { x: number; y: number; finger: boolean } | null = null;
+	private lpTimer = 0;
 
 	/* 视口：缩放 + 平移。笔迹坐标始终是内容单位，跟屏幕无关。 */
 	private zoom = 1;
@@ -158,7 +163,12 @@ export class HandwritingView extends TextFileView {
 		for (const d of this.seps) d.setAttribute("style", narrow ? S.sepNarrow : S.sep);
 	}
 
-	async onClose() { this.ro?.disconnect(); window.clearTimeout(this.sbarTimer); this.stopGlide(); }
+	async onClose() {
+		this.ro?.disconnect();
+		window.clearTimeout(this.sbarTimer);
+		this.clearLongPress();
+		this.stopGlide();
+	}
 
 	/* ================= 工具栏 ================= */
 
@@ -390,10 +400,11 @@ export class HandwritingView extends TextFileView {
 		const sel = mode === "selected";
 		cx.setLineDash(mode === "drawing" ? [] : [sel ? 9 / this.scale : 7 / this.scale, 6 / this.scale]);
 		cx.lineWidth = (sel ? 3 : 2) / this.scale;
-		cx.strokeStyle = mode === "idle" ? "rgba(91,110,214,.4)" : "rgba(91,110,214,.95)";
+		// 未选中是暗蓝细虚线，选中变亮蓝加粗 —— 一眼要能看出状态差别
+		cx.strokeStyle = mode === "idle" ? "rgba(78,96,180,.42)" : "rgba(70,135,255,1)";
 		pathToCanvas(cx, path);
 		if (mode !== "drawing") {
-			cx.fillStyle = sel ? "rgba(91,110,214,.14)" : "rgba(91,110,214,.05)";
+			cx.fillStyle = sel ? "rgba(70,135,255,.16)" : "rgba(78,96,180,.05)";
 			cx.fill();
 		}
 		cx.stroke();
@@ -437,6 +448,10 @@ export class HandwritingView extends TextFileView {
 				if (!this.plugin.settings.allowFinger) {
 					this.panFrom = { x: e.clientX, y: e.clientY };
 					this.velSamples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
+					// 手指不画画，所以轻点和长按都能安全地拿来操作区域
+					this.tap = { x: e.clientX, y: e.clientY, finger: true };
+					const p = this.toPage(e);
+					this.armLongPress(p.x, p.y, true);
 					return;
 				}
 			}
@@ -450,6 +465,13 @@ export class HandwritingView extends TextFileView {
 			const pt = this.toPage(e);
 
 			if (this.tool === "eraser") { this.eraseAt(pt.x, pt.y); return; }
+
+			// 笔也支持轻点选中：按下时先存疑，动了才算笔画，没动就是点击
+			this.tap = { x: e.clientX, y: e.clientY, finger: false };
+			// 笔的长按只在"已经选中"时才响应，避免写字时笔停顿一下就弹菜单
+			this.armLongPress(pt.x, pt.y,
+				!!this.selRegion && !!this.doc.regions.find(
+					(r) => r.id === this.selRegion && pointInPoly(r.path, pt.x, pt.y)));
 
 			// 已选中的区域：在里面按下就是拖它，不是画画
 			if (this.selRegion) {
@@ -465,27 +487,16 @@ export class HandwritingView extends TextFileView {
 				this.select(null);   // 点到别处 -> 取消选中，然后照常画
 			}
 
-			if (this.tool === "lasso") {
-				// 套索工具兼作选择工具：点在已有区域里就是选中它
-				const hit = this.regionAt(pt.x, pt.y);
-				if (hit) {
-					this.drawing = false;
-					this.select(hit.id);
-					this.strokesInRegionBefore = this.doc.strokes
-						.map((st, i) => (strokeInRegion(st, hit) ? i : -1))
-						.filter((i) => i >= 0);
-					this.beginRegionDrag(hit, pt.x, pt.y);
-					return;
-				}
-				this.lasso = [[pt.x, pt.y]];
-				this.schedule();
-				return;
-			}
+			if (this.tool === "lasso") { this.lasso = [[pt.x, pt.y]]; this.schedule(); return; }
 			this.cur = { c: this.color, s: this.size, pts: [pt] };
 			this.schedule();
 		});
 
 		this.registerDomEvent(el, "pointermove", (e: PointerEvent) => {
+			if (this.tap && Math.hypot(e.clientX - this.tap.x, e.clientY - this.tap.y) > (this.tap.finger ? 9 : 5)) {
+				this.tap = null;
+				this.clearLongPress();
+			}
 			if (this.touches.has(e.pointerId)) {
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				if (this.touches.size >= 2) { this.handlePinch(); return; }
@@ -539,6 +550,28 @@ export class HandwritingView extends TextFileView {
 		});
 
 		const end = (e: PointerEvent) => {
+			this.clearLongPress();
+			const wasTap = this.tap;
+			this.tap = null;
+			if (wasTap) {
+				const p = this.toPage(e);
+				// 拖动区域中途松手不算轻点
+				if (!this.regionDrag || !this.regionDrag.moved) {
+					const before = this.selRegion;
+					this.handleTap(p.x, p.y);
+					// 点在圈上：丢掉那个"点"笔画，也不要惯性滚动
+					if (this.selRegion || before) {
+						this.touches.delete(e.pointerId);
+						this.panFrom = null;
+						this.pinch = null;
+						this.regionDrag = null;
+						this.drawing = false;
+						this.cur = null;
+						this.redrawLive();
+						return;
+					}
+				}
+			}
 			if (this.touches.delete(e.pointerId)) {
 				if (this.touches.size < 2) this.pinch = null;
 				if (this.touches.size === 1) {
@@ -604,11 +637,38 @@ export class HandwritingView extends TextFileView {
 		return null;
 	}
 
-	private select(id: string | null) {
-		if (this.selRegion === id) return;
+	private select(id: string | null, opts = false) {
+		if (this.selRegion === id && this.showOpts === opts) return;
 		this.selRegion = id;
+		this.showOpts = id ? opts : false;
 		this.redrawAll();
 		this.rebuildOverlay();
+	}
+
+	/** 轻点：点在圈上（或标签上）就选中它，点空白就取消。圈和标签是同一个东西。 */
+	private handleTap(x: number, y: number) {
+		const hit = this.regionAt(x, y);
+		this.select(hit ? hit.id : null);
+	}
+
+	private armLongPress(x: number, y: number, allow: boolean) {
+		this.clearLongPress();
+		if (!allow) return;
+		this.lpTimer = window.setTimeout(() => {
+			this.lpTimer = 0;
+			if (!this.tap) return;              // 已经移动了，不算长按
+			const hit = this.regionAt(x, y);
+			if (!hit) return;
+			this.tap = null;                    // 长按已经处理，抬手时不要再当轻点
+			this.drawing = false;
+			this.cur = null;
+			this.redrawLive();
+			this.select(hit.id, true);
+		}, 480);
+	}
+
+	private clearLongPress() {
+		if (this.lpTimer) { window.clearTimeout(this.lpTimer); this.lpTimer = 0; }
 	}
 
 	private beginRegionDrag(g: Region, x: number, y: number) {
@@ -738,6 +798,7 @@ export class HandwritingView extends TextFileView {
 			this.doc.regions.push(region);
 			this.undoStack.push({ kind: "region-add", id: region.id });
 			this.selRegion = region.id;
+			this.showOpts = false;
 			this.tool = "pen";
 			this.buildToolbar(this.tools);
 			this.recountPages();
@@ -822,13 +883,31 @@ export class HandwritingView extends TextFileView {
 			text: g.name || "(未命名)",
 			attr: { style: sel ? S.regionNameOn : S.regionName },
 		});
-		name.addEventListener("pointerdown", (e) => e.stopPropagation());
-		name.addEventListener("click", (e) => {
+		// 标签和圈是同一个东西：点一下选中，长按弹选项
+		let lp = 0, tapAt: { x: number; y: number } | null = null;
+		name.addEventListener("pointerdown", (e: PointerEvent) => {
 			e.stopPropagation();
-			this.select(sel ? null : g.id);
+			tapAt = { x: e.clientX, y: e.clientY };
+			lp = window.setTimeout(() => { lp = 0; tapAt = null; this.select(g.id, true); }, 480);
+		});
+		name.addEventListener("pointermove", (e: PointerEvent) => {
+			if (tapAt && Math.hypot(e.clientX - tapAt.x, e.clientY - tapAt.y) > 8) {
+				tapAt = null;
+				if (lp) { window.clearTimeout(lp); lp = 0; }
+			}
+		});
+		const nameUp = (e: PointerEvent) => {
+			e.stopPropagation();
+			if (lp) { window.clearTimeout(lp); lp = 0; }
+			if (tapAt) { tapAt = null; this.select(sel ? null : g.id); }
+		};
+		name.addEventListener("pointerup", nameUp);
+		name.addEventListener("pointercancel", () => {
+			if (lp) { window.clearTimeout(lp); lp = 0; }
+			tapAt = null;
 		});
 
-		if (!sel) return;
+		if (!sel || !this.showOpts) return;
 
 		const btn = (icon: "rename" | "copy" | "trash", title: string, cb: () => void) => {
 			const b = bar.createEl("button", { attr: { "aria-label": title, title, style: S.regionBtn } });
@@ -855,6 +934,7 @@ export class HandwritingView extends TextFileView {
 			this.undoStack.push({ kind: "region-del", index: i, region: this.doc.regions[i] });
 			this.doc.regions.splice(i, 1);
 			this.selRegion = null;
+			this.showOpts = false;
 			this.redrawAll();
 			this.rebuildOverlay();
 			this.requestSave();
