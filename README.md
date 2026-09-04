@@ -5,6 +5,51 @@ Obsidian" but to make handwritten content **live inside Obsidian's semantics** â
 wiki links, backlinks, the graph, global search and block references all keep
 working on it.
 
+## Status: beta
+
+This is a **public beta**, not a finished release. It is used daily on an iPad
+with an Apple Pencil and the features below all work, but it has not been
+through Obsidian's community plugin review, and it has been tested by one
+person on one device.
+
+What that means in practice:
+
+- **The notes stay readable without this plugin.** A handwriting note is an
+  ordinary markdown file: frontmatter, title, region headings and links are all
+  plain text, and only the ink is a compressed blob inside an Obsidian comment.
+  Nothing is locked inside a proprietary container.
+- **The ink format may still change.** It is versioned and older files are
+  migrated when opened -- v1 files already are -- but that path has not been
+  stress-tested across many versions yet. Back up a vault you care about before
+  putting a term's notes into it.
+- **Expect bugs, and expect the interface to keep moving.**
+
+Known limitations in this release:
+
+| | |
+|---|---|
+| memory | the whole note stays resident; past roughly twenty dense pages it gets heavy. Split long notes for now. |
+| text boxes | designed for, not implemented |
+| lasso | selecting, dragging and deleting work; resizing does not |
+| input | built around iPad and Apple Pencil. A mouse works on desktop; other styluses are untested. |
+| platform | tested on iPadOS only |
+
+## Installing the beta
+
+It is not in the community plugin list yet, so install it with
+[BRAT](https://github.com/TfTHacker/obsidian42-brat):
+
+1. Install **BRAT** from Settings -> Community plugins.
+2. Run the command *BRAT: Add a beta plugin for testing* and paste this
+   repository's path, `OWNER/obsidian-handwriting`.
+3. Enable **Handwriting** under Community plugins.
+
+BRAT picks up later beta releases on its own.
+
+To install by hand instead, take `main.js` and `manifest.json` from a
+[release](../../releases) and drop them in
+`<vault>/.obsidian/plugins/handwriting/`.
+
 ## File format
 
 A handwriting note is an **ordinary `.md` file**, identified by the
@@ -113,8 +158,8 @@ the same thing whoever opens it.
 
 ## Features
 
-- Pressure-sensitive ink (Apple Pencil), one-euro filter and tip prediction to
-  cut perceived latency
+- Pressure-sensitive ink (Apple Pencil), distance-domain smoothing and tip
+  prediction to cut perceived latency
 - Lasso a piece of content and name it; elsewhere `![[note#region name]]` embeds
   that ink directly
 - Wiki-link items on the canvas that can display the target handwriting inline
@@ -155,4 +200,4 @@ Stroke rendering has stepped on three landmines, each with a test
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).
