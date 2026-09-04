@@ -171,7 +171,8 @@ export class HandwritingView extends TextFileView {
 			this.bindPointer();
 
 			this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
-			this.ro.observe(root);
+			this.ro.observe(root);        // decides the narrow layout
+			this.ro.observe(this.surface); // decides the canvas size
 			this.applyLayout();
 			this.resize();
 		} catch (e) {
@@ -192,7 +193,7 @@ export class HandwritingView extends TextFileView {
 		this.narrow = narrow;
 		this.contentEl.setAttribute("style", narrow ? S.rootNarrow : S.root);
 		this.tools.setAttribute("style", narrow ? S.toolsNarrow : S.tools);
-		this.ctxBar?.setAttribute("style", narrow ? S.ctxBarNarrow : S.ctxBar);
+		if (this.ctxBar?.isConnected) this.ctxBar.setAttribute("style", narrow ? S.ctxBarNarrow : S.ctxBar);
 		for (const d of this.seps) d.setAttribute("style", narrow ? S.sepNarrow : S.sep);
 		if (this.ctxBar) this.buildContextBar();
 	}
@@ -254,10 +255,18 @@ export class HandwritingView extends TextFileView {
 		if (!bar) return;
 		bar.empty();
 		this.syncCtx = null;
-		// Neither lasso has anything to configure, so the whole column goes away
-		// rather than sitting there empty and taking up width.
-		if (this.tool === "lasso" || this.tool === "wiki") { bar.style.display = "none"; return; }
-		bar.style.display = "flex";
+
+		// Neither lasso has anything to configure, so the column is detached from
+		// the DOM entirely rather than merely hidden. Removing it lets the surface
+		// reclaim the width, and the ResizeObserver on the surface then resizes the
+		// canvas to match -- display:none did the first part but not the second,
+		// leaving the canvas 72px narrower than the area it was supposed to fill.
+		if (this.tool === "lasso" || this.tool === "wiki") { bar.remove(); return; }
+		if (!bar.isConnected) {
+			// Reapply the style: applyLayout skips the bar while it is detached
+			bar.setAttribute("style", this.narrow ? S.ctxBarNarrow : S.ctxBar);
+			this.contentEl.insertBefore(bar, this.tools);
+		}
 		const vert = !this.narrow;
 
 		const sep = () => bar.createDiv({ attr: { style: vert ? S.sep : S.sepNarrow } });
