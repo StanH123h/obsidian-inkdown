@@ -48,7 +48,7 @@ It is not in the community plugin list yet, so install it with
 
 1. Install **BRAT** from Settings -> Community plugins.
 2. Run the command *BRAT: Add a beta plugin for testing* and paste this
-   repository's path, `OWNER/obsidian-inklink`.
+   repository's path, `StanH123h/obsidian-inklink`.
 3. Enable **Handwriting** under Community plugins.
 
 BRAT picks up later beta releases on its own.
