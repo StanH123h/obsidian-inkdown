@@ -1354,6 +1354,9 @@ export class HandwritingView extends TextFileView {
 			"root display / dir": cs(root, "display") + " / " + cs(root, "flex-direction"),
 			"root 尺寸": `${root.clientWidth} x ${root.clientHeight}`,
 			"tools 尺寸": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
+			"配置栏": this.ctxBar
+				? `${this.ctxBar.clientWidth} x ${this.ctxBar.clientHeight}，${this.ctxBar.childElementCount} 个子元素，工具=${this.tool}`
+				: "不存在",
 			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
 			"代码版本 / manifest": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
 			"笔宽档位 / 三档": `${this.sizeIdx} / [${this.sizes.join(", ")}]`,

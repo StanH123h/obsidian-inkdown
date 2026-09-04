@@ -110,12 +110,13 @@ export const S = {
 		"display:flex;flex-direction:column;align-items:center;justify-content:flex-start;" +
 		`gap:7px;flex:0 0 auto;width:72px;height:100%;padding:10px 6px;margin:0;box-sizing:border-box;` +
 		`overflow:hidden;border-left:1px solid ${BORDER};` +
-		"background:var(--background-secondary, rgba(127,127,127,.07));",
+		// A shade darker than the tool bar so the two columns read as two
+		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
 	ctxBarNarrow:
 		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
 		`gap:7px;flex:0 0 auto;width:100%;height:58px;padding:8px 10px;margin:0;box-sizing:border-box;` +
 		`overflow-x:auto;overflow-y:hidden;border-top:1px solid ${BORDER};` +
-		"background:var(--background-secondary, rgba(127,127,127,.07));",
+		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
 
 	// Segmented control with a highlight pill that slides between the options.
 	seg:
