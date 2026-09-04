@@ -1,6 +1,6 @@
 import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import { HandwritingView, VIEW_TYPE } from "./view";
-import { emptyDoc, isHandwritingFile } from "./format";
+import { emptyDoc, isHandwritingData, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
 
 export interface HandwritingSettings {
@@ -50,6 +50,8 @@ export default class HandwritingPlugin extends Plugin {
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.claimLeaves()));
 		// 识别靠 frontmatter，所以缓存就绪后要再扫一遍 —— 启动时可能先于缓存打开文件
 		this.registerEvent(this.app.metadataCache.on("resolved", () => this.claimLeaves()));
+		this.registerEvent(this.app.metadataCache.on("changed", () => this.claimLeaves()));
+		this.registerEvent(this.app.workspace.on("file-open", () => this.claimLeaves()));
 		this.app.workspace.onLayoutReady(() => this.claimLeaves());
 
 		this.addCommand({
@@ -63,12 +65,14 @@ export default class HandwritingPlugin extends Plugin {
 			name: "手写视图 / Markdown 源码 切换",
 			checkCallback: (checking) => {
 				const leaf = this.app.workspace.getMostRecentLeaf();
-				const file = this.currentFile(leaf);
-				if (!isHandwritingFile(this.app, file)) return false;
-				if (!checking) {
-					if (leaf!.view.getViewType() === VIEW_TYPE) this.toMarkdown(leaf!);
-					else this.toHandwriting(leaf!, file);
+				if (!leaf) return false;
+				if (leaf.view.getViewType() === VIEW_TYPE) {
+					if (!checking) this.toMarkdown(leaf);
+					return true;
 				}
+				const file = this.isHandwritingLeaf(leaf);
+				if (!file) return false;
+				if (!checking) this.toHandwriting(leaf, file);
 				return true;
 			},
 		});
@@ -127,12 +131,21 @@ export default class HandwritingPlugin extends Plugin {
 		return v?.file ?? null;
 	}
 
+	/** MarkdownView 手上就有文件内容，所以除了查元数据缓存，再直接看一眼内容。
+	 *  缓存是异步更新的 —— 重命名、外部同步、刚创建的文件都可能还没进缓存，
+	 *  只靠缓存判断会漏掉这些情况。 */
+	isHandwritingLeaf(leaf: WorkspaceLeaf): TFile | null {
+		const view = leaf.view as MarkdownView;
+		const file = view?.file;
+		if (!file) return null;
+		if (isHandwritingFile(this.app, file)) return file;
+		return isHandwritingData(view.data ?? "") ? file : null;
+	}
+
 	private claimLeaves() {
 		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-			const file = (leaf.view as MarkdownView).file;
-			if (file && isHandwritingFile(this.app, file) && !this.bypass.has(file.path)) {
-				this.toHandwriting(leaf, file);
-			}
+			const file = this.isHandwritingLeaf(leaf);
+			if (file && !this.bypass.has(file.path)) this.toHandwriting(leaf, file);
 		}
 	}
 

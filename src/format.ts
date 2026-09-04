@@ -69,7 +69,7 @@ export function isHandwritingFile(app: App, file: TFile | null): file is TFile {
 
 /** 直接看内容判断。用于元数据缓存还没就绪、或者拿不到 TFile 的场合。 */
 export function isHandwritingData(data: string): boolean {
-	return /^---[\s\S]*?^handwriting:/m.test(data.slice(0, 800)) || data.includes("%%ink");
+	return /^---[\s\S]*?^handwriting:/m.test(data.slice(0, 800)) || data.includes("%%ink\n");
 }
 
 export const newId = () => Math.random().toString(36).slice(2, 8);
