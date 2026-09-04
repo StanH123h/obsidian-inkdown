@@ -219,6 +219,16 @@ export function pointInPoly(path: [number, number][], px: number, py: number): b
 	return inside;
 }
 
+/** 多边形面积（鞋带公式取绝对值）。嵌套时用它决定"哪个更内层"——
+ *  不用包围盒面积，手绘的圈形状不规则，包围盒会骗人。 */
+export function polyArea(path: [number, number][]): number {
+	let s = 0;
+	for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+		s += path[j][0] * path[i][1] - path[i][0] * path[j][1];
+	}
+	return Math.abs(s) / 2;
+}
+
 /** 点到多边形边界的最短距离。判定"点在圈上"时给一点容差 —— 
  *  要求正好戳在细虚线上太苛刻了。 */
 export function distToPoly(path: [number, number][], px: number, py: number): number {

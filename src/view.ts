@@ -1,7 +1,7 @@
 import { Component, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	distToPoly, drawStroke, hitStroke, pathToCanvas, pointInPoly, polyBounds, predictTip, strokeInRegion,
+	distToPoly, drawStroke, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip, strokeInRegion,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -635,23 +635,35 @@ export class HandwritingView extends TextFileView {
 		});
 	}
 
-	/** 命中判定：落在圈内，或离圈的轮廓够近，都算点中了。
-	 *  只认"正好戳在细虚线上"太苛刻，手指根本点不准。 */
+	/** 命中判定，两条规则，顺序不能反：
+	 *
+	 *  1. 「在里面」优先于「在旁边」—— 只要点落在某个圈内部，就在这些圈里挑，
+	 *     绝不会被旁边一个轮廓碰巧更近的圈抢走。
+	 *  2. 内部有多个（嵌套）时选**面积最小**的，也就是最内层。外圈仍然选得到：
+	 *     点它轮廓上，或者点内层没盖住的地方。
+	 *
+	 *  都没进到，才退而求其次找容差内轮廓最近的。同一位置反复点结果不变。 */
 	private regionAt(x: number, y: number, tol = 16): Region | null {
-		this.lastHitInfo = `(${x.toFixed(0)},${y.toFixed(0)}) 共 ${this.doc.regions.length} 个区域`;
-		let best: Region | null = null, bestD = Infinity;
+		let inner: Region | null = null, innerArea = Infinity;
+		let near: Region | null = null, nearD = Infinity;
+
 		for (const g of this.doc.regions) {
 			if (g.path.length < 3) continue;
-			const inside = pointInPoly(g.path, x, y);
-			const d = distToPoly(g.path, x, y);
-			if (!inside && d > tol) continue;
-			// 同时命中多个时取轮廓最近的那个
-			const score = inside ? -1 : d;
-			if (score < bestD) { bestD = score; best = g; }
+			if (pointInPoly(g.path, x, y)) {
+				const a = polyArea(g.path);
+				if (a < innerArea) { innerArea = a; inner = g; }
+			} else {
+				const d = distToPoly(g.path, x, y);
+				if (d <= tol && d < nearD) { nearD = d; near = g; }
+			}
 		}
-		this.lastHitInfo += best ? ` -> 命中「${best.name}」` : " -> 未命中";
-		return best;
+
+		const hit = inner ?? near;
+		this.lastHitInfo = `(${x.toFixed(0)},${y.toFixed(0)}) 共 ${this.doc.regions.length} 个区域 -> `
+			+ (hit ? `命中「${hit.name}」(${inner ? "圈内" : `轮廓 ${nearD.toFixed(0)} 单位`})` : "未命中");
+		return hit;
 	}
+
 	private lastHitInfo = "还没点过";
 
 	private select(id: string | null, opts = false) {
