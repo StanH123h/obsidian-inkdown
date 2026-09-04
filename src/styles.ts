@@ -17,7 +17,7 @@ const HOVER = "var(--background-modifier-hover, rgba(127,127,127,.18))";
 const BORDER = "var(--background-modifier-border, rgba(127,127,127,.28))";
 
 const BTN =
-	"display:flex;align-items:center;justify-content:center;flex:0 0 auto;" +
+	"position:relative;display:flex;align-items:center;justify-content:center;flex:0 0 auto;" +
 	"width:40px;height:40px;padding:0;margin:0;border:0;border-radius:9px;" +
 	"box-shadow:none;cursor:pointer;-webkit-appearance:none;appearance:none;";
 
@@ -152,6 +152,11 @@ export const S = {
 	sizePopRange: "width:170px;margin:0;",
 	sizePopVal:
 		`min-width:26px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums;color:${MUTED};`,
+
+	// Small corner label on a tool button, e.g. the Wiki variant of the lasso
+	btnBadge:
+		"position:absolute;right:2px;bottom:1px;font-size:7px;line-height:1;" +
+		"font-weight:700;letter-spacing:-.02em;pointer-events:none;",
 
 	version:
 		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +

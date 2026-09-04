@@ -1,7 +1,7 @@
 import { Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip, strokeInRegion,
+	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -21,7 +21,9 @@ const dotPx = (sz: number) => Math.min(sz + 4, 28);
 
 const COLORS = ["#1a1a1a", "#c0392b", "#2d6ca8", "#1a7f37"];
 
-type Tool = "pen" | "eraser" | "lasso";
+/** "lasso" selects and manipulates content; "wiki" draws the named regions that
+ *  [[note#region]] resolves to. Same drawing gesture, different meaning. */
+type Tool = "pen" | "eraser" | "lasso" | "wiki";
 
 type UndoEntry =
 	| { kind: "stroke-add"; index: number }
@@ -31,7 +33,7 @@ type UndoEntry =
 	| { kind: "item-del"; index: number; item: LinkItem }
 	| { kind: "region-add"; id: string }
 	| { kind: "region-del"; index: number; region: Region }
-	| { kind: "region-move"; id: string; dx: number; dy: number; strokes: number[] };
+	| { kind: "region-move"; id: string; dx: number; dy: number };
 
 export class HandwritingView extends TextFileView {
 	private plugin: HandwritingPlugin;
@@ -214,7 +216,9 @@ export class HandwritingView extends TextFileView {
 
 		const penBtn = btn("pen", "笔", () => { this.tool = "pen"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
 		const eraBtn = btn("eraser", "橡皮", () => { this.tool = "eraser"; sync(); this.buildContextBar(); });
-		const lasBtn = btn("lasso", "套索：圈一块内容并命名", () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
+		const lasBtn = btn("lasso", "套索：圈选内容", () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
+		const wikiBtn = btn("lasso", "Wiki 套索：圈一块内容并命名，供 [[笔记#区域]] 引用", () => { this.tool = "wiki"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
+		wikiBtn.createDiv({ text: "Wiki", attr: { style: S.btnBadge } });
 		sep();
 
 		btn("fit", "适应页宽（重置缩放）", () => this.fitWidth());
@@ -232,6 +236,7 @@ export class HandwritingView extends TextFileView {
 			penBtn.setAttribute("style", this.tool === "pen" ? S.btnOn : S.btn);
 			eraBtn.setAttribute("style", this.tool === "eraser" ? S.btnOn : S.btn);
 			lasBtn.setAttribute("style", this.tool === "lasso" ? S.btnOn : S.btn);
+			wikiBtn.setAttribute("style", this.tool === "wiki" ? S.btnOn : S.btn);
 		};
 		sync();
 	}
@@ -708,9 +713,9 @@ export class HandwritingView extends TextFileView {
 				this.eraseAt(pt.x, pt.y);
 				return;
 			}
-			if (this.tool === "lasso") {
-				// The lasso tool always draws a new ring; otherwise a selected outer
-				// region would make it impossible to draw one inside it
+			if (this.tool === "lasso" || this.tool === "wiki") {
+				// Either lasso tool always draws a new ring; otherwise a selected
+				// outer region would make it impossible to draw one inside it
 				this.drawing = true;
 				this.lastT = e.timeStamp;
 				this.lasso = [[pt.x, pt.y]];
@@ -812,7 +817,7 @@ export class HandwritingView extends TextFileView {
 			this.evtStamps.push(performance.now());
 			if (this.evtStamps.length > 40) this.evtStamps.shift();
 
-			if (this.tool === "lasso") {
+			if (this.tool === "lasso" || this.tool === "wiki") {
 				for (const ev of fresh) { const p = this.toPage(ev); this.lasso?.push([p.x, p.y]); }
 			} else if (this.cur) {
 				for (const ev of fresh) this.cur.pts.push(this.toPage(ev));
@@ -837,10 +842,7 @@ export class HandwritingView extends TextFileView {
 				const d = this.regionDrag;
 				this.regionDrag = null;
 				if (d.moved) {
-					this.undoStack.push({
-						kind: "region-move", id: d.id, dx: d.dx, dy: d.dy,
-						strokes: [...this.strokesInRegionBefore],
-					});
+					this.undoStack.push({ kind: "region-move", id: d.id, dx: d.dx, dy: d.dy });
 					this.recountPages();
 					this.requestSave();
 				}
@@ -873,7 +875,7 @@ export class HandwritingView extends TextFileView {
 				}
 				return;
 			}
-			if (this.tool === "lasso") { this.finishLasso(); return; }
+			if (this.tool === "lasso" || this.tool === "wiki") { this.finishLasso(); return; }
 			if (this.cur && this.cur.pts.length) {
 				this.doc.strokes.push(this.cur);
 				this.undoStack.push({ kind: "stroke-add", index: this.doc.strokes.length - 1 });
@@ -981,22 +983,16 @@ export class HandwritingView extends TextFileView {
 		if (!g) return;
 		this.drawing = false;
 		this.cur = null;
-		this.strokesInRegionBefore = this.doc.strokes
-			.map((st, i) => (strokeInRegion(st, g) ? i : -1))
-			.filter((i) => i >= 0);
 		this.regionDrag = { id, ox: x, oy: y, dx: 0, dy: 0, moved: false };
 	}
 
-	/** Moving a region carries the ink inside it. Otherwise the ring would end up
-	 *  around different content and [[note#region]] would silently resolve to
-	 *  something else. */
+	/** Moving a Wiki region moves only the ring. A Wiki region annotates an area
+	 *  of the page rather than owning what happens to sit in it, so what it
+	 *  resolves to is whatever ends up inside after the move. The plain lasso is
+	 *  the tool that picks content up and carries it. */
 	private moveRegion(g: Region, dx: number, dy: number) {
 		for (const pt of g.path) { pt[0] += dx; pt[1] += dy; }
-		for (const i of this.strokesInRegionBefore) {
-			for (const p of this.doc.strokes[i].pts) { p.x += dx; p.y += dy; }
-		}
 	}
-	private strokesInRegionBefore: number[] = [];
 
 	private stopGlide() {
 		if (this.glideRaf) { cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
@@ -1107,6 +1103,12 @@ export class HandwritingView extends TextFileView {
 
 	private finishLasso() {
 		const path = this.lasso ?? [];
+		if (this.tool === "lasso") {
+			// The plain lasso has no behaviour yet; the ring simply disappears
+			this.lasso = null;
+			this.redrawLive();
+			return;
+		}
 		this.lasso = null;
 		this.redrawLive();
 		const box = polyBounds(path);
@@ -1327,13 +1329,7 @@ export class HandwritingView extends TextFileView {
 			case "region-del": this.doc.regions.splice(e.index, 0, e.region); break;
 			case "region-move": {
 				const g = this.doc.regions.find((r) => r.id === e.id);
-				if (g) {
-					for (const pt of g.path) { pt[0] -= e.dx; pt[1] -= e.dy; }
-					for (const i of e.strokes) {
-						const st = this.doc.strokes[i];
-						if (st) for (const p of st.pts) { p.x -= e.dx; p.y -= e.dy; }
-					}
-				}
+				if (g) for (const pt of g.path) { pt[0] -= e.dx; pt[1] -= e.dy; }
 				break;
 			}
 		}
