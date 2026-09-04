@@ -1,9 +1,9 @@
 {
-  "id": "handwriting",
-  "name": "Handwriting",
+  "id": "inklink",
+  "name": "Inklink",
   "version": "0.15.0",
   "minAppVersion": "1.5.0",
-  "description": "Handwritten notes that live inside your vault, as plain files you own.",
+  "description": "Handwriting that links. Lasso part of a page, name it, and reference it from anywhere as [[note#region]].",
   "author": "lubenwei",
   "isDesktopOnly": false
 }

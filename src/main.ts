@@ -319,7 +319,7 @@ class DiagModal extends Modal {
 	constructor(app: App, private data: Record<string, string>) { super(app); }
 
 	onOpen() {
-		this.titleEl.setText("Handwriting diagnostics");
+		this.titleEl.setText("Inklink diagnostics");
 		const box = this.contentEl.createDiv({
 			attr: { style: "font-size:13px;line-height:1.7;-webkit-user-select:text;user-select:text;" },
 		});

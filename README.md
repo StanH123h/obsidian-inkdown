@@ -1,9 +1,15 @@
-# Obsidian Handwriting
+# Inklink
 
-A handwriting system for Obsidian. The goal is not "write by hand inside
-Obsidian" but to make handwritten content **live inside Obsidian's semantics** —
-wiki links, backlinks, the graph, global search and block references all keep
-working on it.
+Handwriting for Obsidian, built around one idea: **ink should be addressable.**
+Lasso any part of a page, give it a name, and `[[note#that name]]` now points at
+it — from another handwriting note, from an ordinary document, from anywhere.
+`![[note#that name]]` draws it.
+
+The goal is not "write by hand inside Obsidian" but to make handwritten content
+**live inside Obsidian's semantics** — wiki links, backlinks, the graph, global
+search and block references all keep working on it. Several plugins already let
+you draw in Obsidian; the point here is that what you drew participates in the
+vault rather than sitting on top of it.
 
 ## Status: beta
 
@@ -31,7 +37,8 @@ Known limitations in this release:
 | memory | the whole note stays resident; past roughly twenty dense pages it gets heavy. Split long notes for now. |
 | text boxes | designed for, not implemented |
 | lasso | selecting, dragging and deleting work; resizing does not |
-| input | built around iPad and Apple Pencil. A mouse works on desktop; other styluses are untested. |
+| input | built around iPad and Apple Pencil. A mouse works on desktop. |
+| other styluses | should work and are unverified: input goes entirely through standard Pointer Events (`pointerType`, `pressure`, `getCoalescedEvents`), with no platform check anywhere in the path. Surface Pen, Wacom and S Pen ought to behave; none has been tried. |
 | platform | tested on iPadOS only |
 
 ## Installing the beta
@@ -41,14 +48,14 @@ It is not in the community plugin list yet, so install it with
 
 1. Install **BRAT** from Settings -> Community plugins.
 2. Run the command *BRAT: Add a beta plugin for testing* and paste this
-   repository's path, `OWNER/obsidian-handwriting`.
+   repository's path, `OWNER/obsidian-inklink`.
 3. Enable **Handwriting** under Community plugins.
 
 BRAT picks up later beta releases on its own.
 
 To install by hand instead, take `main.js` and `manifest.json` from a
 [release](../../releases) and drop them in
-`<vault>/.obsidian/plugins/handwriting/`.
+`<vault>/.obsidian/plugins/inklink/`.
 
 ## File format
 
@@ -83,6 +90,11 @@ resolves against, and the links. That is what Obsidian indexes and what anyone
 reading the file is actually after; nobody reads two megabytes of coordinates.
 Every other app in this space compresses too -- Xournal++ gzips its XML, Rnote
 gzips its JSON, the JOT spec stores 4/8/16-bit coordinate deltas.
+
+The frontmatter key is `handwriting`, not `inklink`, and stays that way. It
+records **what the file is**, not which plugin wrote it — a note keeps meaning
+the same thing if this plugin is renamed again, or if something else learns to
+read the format.
 
 Files in the older unpacked format still open, and are rewritten packed on the
 next save.

@@ -13,7 +13,7 @@ import type HandwritingPlugin from "./main";
 /** Injected by esbuild at build time; see esbuild.config.mjs */
 declare const __HW_VERSION__: string;
 
-export const VIEW_TYPE = "handwriting-view";
+export const VIEW_TYPE = "inklink-view";
 
 const EDGE_PAD = 12;   // css px
 
