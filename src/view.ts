@@ -16,8 +16,10 @@ export const VIEW_TYPE = "handwriting-view";
 
 const EDGE_PAD = 12;   // css px
 
+/** Diameter of the preview dot on a width button, capped so it fits the button */
+const dotPx = (sz: number) => Math.min(sz + 4, 28);
+
 const COLORS = ["#1a1a1a", "#c0392b", "#2d6ca8", "#1a7f37"];
-const SIZES = [4, 8, 14];
 
 type Tool = "pen" | "eraser" | "lasso";
 
@@ -54,7 +56,13 @@ export class HandwritingView extends TextFileView {
 
 	private tool: Tool = "pen";
 	private color = COLORS[0];
-	private size = SIZES[1];
+	/** Which of the three width slots is active. The widths themselves live in
+	 *  settings, so they survive a restart and follow the vault across devices. */
+	private sizeIdx = 1;
+	private sizePop: HTMLElement | null = null;
+
+	private get sizes() { return this.plugin.settings.sizes; }
+	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
 	private undoStack: UndoEntry[] = [];
 
 	/** Id of the selected region. Tap empty space to clear it. */
@@ -173,6 +181,7 @@ export class HandwritingView extends TextFileView {
 	}
 
 	async onClose() {
+		this.closeSizePop();
 		this.ro?.disconnect();
 		window.clearTimeout(this.sbarTimer);
 		this.clearLongPress();
@@ -198,10 +207,16 @@ export class HandwritingView extends TextFileView {
 		const lasBtn = btn("lasso", "套索：圈一块内容并命名", () => { this.tool = "lasso"; sync(); });
 		sep();
 
-		const sizeBtns = SIZES.map((sz) => {
+		// Tapping an inactive width selects it; tapping the active one again opens a
+		// slider to change that width, with the dot previewing it live.
+		const sizeDots: HTMLElement[] = [];
+		const sizeBtns = this.sizes.map((sz, i) => {
 			const b = bar.createEl("button", { attr: { "aria-label": `笔宽 ${sz}`, style: S.btn } });
-			b.createDiv({ attr: { style: S.dot(sz + 4) } });
-			b.addEventListener("click", () => { this.size = sz; sync(); });
+			sizeDots.push(b.createDiv({ attr: { style: S.dot(dotPx(sz)) } }));
+			b.addEventListener("click", () => {
+				if (this.sizeIdx === i && !this.sizePop) this.openSizePop(i, b, sizeDots[i]);
+				else { this.closeSizePop(); this.sizeIdx = i; sync(); }
+			});
 			return b;
 		});
 		sep();
@@ -229,10 +244,55 @@ export class HandwritingView extends TextFileView {
 			penBtn.setAttribute("style", this.tool === "pen" ? S.btnOn : S.btn);
 			eraBtn.setAttribute("style", this.tool === "eraser" ? S.btnOn : S.btn);
 			lasBtn.setAttribute("style", this.tool === "lasso" ? S.btnOn : S.btn);
-			sizeBtns.forEach((b, i) => b.setAttribute("style", SIZES[i] === this.size ? S.btnOn : S.btn));
+			sizeBtns.forEach((b, i) => b.setAttribute("style", i === this.sizeIdx ? S.btnOn : S.btn));
 			colorDots.forEach((d, i) => d.setAttribute("style", S.colorDot(COLORS[i], COLORS[i] === this.color)));
 		};
 		sync();
+	}
+
+	/** Slider for one of the three pen widths. Anchored next to its button, and
+	 *  the button's dot previews the width while dragging. Saved on release, not
+	 *  on every input event, because saving refreshes every open view. */
+	private openSizePop(i: number, btn: HTMLElement, dot: HTMLElement) {
+		this.closeSizePop();
+		const pop = this.contentEl.createDiv({ attr: { style: S.sizePop } });
+		this.sizePop = pop;
+
+		const range = pop.createEl("input", {
+			attr: { type: "range", min: "1", max: "28", step: "1", style: S.sizePopRange },
+		});
+		range.value = String(this.sizes[i]);
+		const val = pop.createDiv({ text: String(this.sizes[i]), attr: { style: S.sizePopVal } });
+
+		range.addEventListener("input", () => {
+			const v = Number(range.value);
+			this.sizes[i] = v;
+			val.setText(String(v));
+			dot.setAttribute("style", S.dot(dotPx(v)));
+			btn.setAttribute("aria-label", `笔宽 ${v}`);
+		});
+		const save = () => this.plugin.saveSettings();
+		range.addEventListener("change", save);
+		range.addEventListener("pointerup", save);
+		pop.addEventListener("pointerdown", (e) => e.stopPropagation());
+
+		// Place it beside the button: to the left of a vertical toolbar, above a
+		// horizontal one. Clamped so it never leaves the view.
+		const r = btn.getBoundingClientRect();
+		const root = this.contentEl.getBoundingClientRect();
+		const w = pop.offsetWidth || 260, h = pop.offsetHeight || 46;
+		if (this.narrow) {
+			pop.style.left = Math.min(Math.max(r.left - root.left + r.width / 2 - w / 2, 8), Math.max(8, root.width - w - 8)) + "px";
+			pop.style.top = Math.max(8, r.top - root.top - h - 10) + "px";
+		} else {
+			pop.style.left = Math.max(8, r.left - root.left - w - 10) + "px";
+			pop.style.top = Math.min(Math.max(r.top - root.top + r.height / 2 - h / 2, 8), Math.max(8, root.height - h - 8)) + "px";
+		}
+	}
+
+	private closeSizePop() {
+		this.sizePop?.remove();
+		this.sizePop = null;
 	}
 
 	/* ============ Size and coordinates ============ */
@@ -466,6 +526,7 @@ export class HandwritingView extends TextFileView {
 		const el = this.live;
 
 		this.registerDomEvent(el, "pointerdown", (e: PointerEvent) => {
+			this.closeSizePop();
 			const finger = e.pointerType === "touch";
 
 			if (finger && !this.plugin.settings.allowFinger) {

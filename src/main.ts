@@ -4,6 +4,7 @@ import { emptyDoc, isHandwritingData, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
 
 export interface HandwritingSettings {
+	sizes: number[];     // the three pen widths on the toolbar, in page units
 	smooth: number;      // input streamlining, 0..0.9
 	thin: number;        // how much pressure affects width, 0..1
 	taper: number;       // 0 = off, 1 = subtle
@@ -14,6 +15,7 @@ export interface HandwritingSettings {
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
+	sizes: [4, 8, 14],
 	smooth: 0.55,
 	thin: 0.70,
 	taper: 1,
@@ -189,6 +191,13 @@ export default class HandwritingPlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		// Copy the array rather than sharing DEFAULT_SETTINGS' one, which editing a
+		// width would otherwise mutate. Also guard against a damaged data.json.
+		const saved = Array.isArray(this.settings.sizes) ? this.settings.sizes : [];
+		this.settings.sizes = DEFAULT_SETTINGS.sizes.map((d, i) => {
+			const v = Number(saved[i]);
+			return Number.isFinite(v) && v >= 1 && v <= 28 ? v : d;
+		});
 	}
 
 	async saveSettings() {

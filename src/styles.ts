@@ -105,6 +105,15 @@ export const S = {
 		"white-space:nowrap;color:var(--text-on-accent,#fff);" +
 		"background:var(--interactive-accent,#5b6ed6);opacity:.85;touch-action:none;",
 
+	sizePop:
+		"position:absolute;z-index:30;display:flex;align-items:center;gap:11px;" +
+		"padding:11px 15px;border-radius:13px;box-sizing:border-box;" +
+		`background:var(--background-primary, #fff);border:1px solid ${BORDER};` +
+		"box-shadow:0 6px 24px rgba(0,0,0,.22);",
+	sizePopRange: "width:170px;margin:0;",
+	sizePopVal:
+		`min-width:26px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums;color:${MUTED};`,
+
 	version:
 		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +
 		`color:${MUTED};opacity:.55;text-align:center;`,
