@@ -334,30 +334,20 @@ export class HandwritingView extends TextFileView {
 				});
 			sep();
 
-			// A number alone says nothing about how big the eraser actually is.
-			// The swatch scales with it, and while the slider moves we also park the
-			// real dashed ring in the middle of the page, at true size.
+			// A number alone says nothing about how big the eraser actually is, so a
+			// swatch beside the slider scales with it. The ring on the canvas stays
+			// where it belongs -- under the pointer while erasing -- rather than
+			// being parked mid-page while the slider moves.
 			const previewPx = (v: number) => Math.min(8 + v * 0.7, 46);
 			const previewBox = bar.createDiv({ attr: { style: S.eraserPreviewBox } });
 			const preview = previewBox.createDiv({ attr: { style: S.eraserPreview + `width:${previewPx(this.plugin.settings.eraserSize)}px;height:${previewPx(this.plugin.settings.eraserSize)}px;` } });
-			let clearRing = 0;
 			const slider = this.makeSlider(bar, vert, 3, 60,
 				() => this.plugin.settings.eraserSize,
 				(v) => {
 					this.plugin.settings.eraserSize = v;
 					preview.setAttribute("style", S.eraserPreview + `width:${previewPx(v)}px;height:${previewPx(v)}px;`);
-					window.clearTimeout(clearRing);
-					this.eraserAt = { x: this.panX + this.viewW / 2, y: this.panY + this.viewH / 2 };
-					this.redrawLive();
 				},
-				() => {
-					this.plugin.saveSettings();
-					// Leave the ring up briefly after release so the size registers
-					clearRing = window.setTimeout(() => {
-						this.eraserAt = null;
-						this.redrawLive();
-					}, 900);
-				});
+				() => this.plugin.saveSettings());
 			this.syncCtx = () => { seg.refresh(); slider.refresh(); };
 			return;
 		}
