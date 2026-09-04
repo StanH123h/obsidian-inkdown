@@ -225,13 +225,23 @@ export const ICONS = {
 	code: ["M9 8l-4 4 4 4", "M15 8l4 4-4 4"],
 };
 
+/* Optical sizing. Rendering every icon at the same nominal size does not make
+ * them look the same size: a shape that leaves its corners empty, like the
+ * eraser's tilted block, reads smaller than one that fills the frame. These are
+ * per-icon corrections, not a global scale. */
+const ICON_PX: Partial<Record<keyof typeof ICONS, number>> = {
+	eraser: 26,
+	pen: 24,
+};
+
 const NS = "http://www.w3.org/2000/svg";
 
-export function drawIcon(el: HTMLElement, name: keyof typeof ICONS, px = 22) {
+export function drawIcon(el: HTMLElement, name: keyof typeof ICONS, px?: number) {
+	const size = px ?? ICON_PX[name] ?? 22;
 	const svg = document.createElementNS(NS, "svg");
 	svg.setAttribute("viewBox", "0 0 24 24");
-	svg.setAttribute("width", String(px));
-	svg.setAttribute("height", String(px));
+	svg.setAttribute("width", String(size));
+	svg.setAttribute("height", String(size));
 	svg.setAttribute("fill", "none");
 	svg.setAttribute("stroke", "currentColor");
 	svg.setAttribute("stroke-width", "1.9");
@@ -239,7 +249,7 @@ export function drawIcon(el: HTMLElement, name: keyof typeof ICONS, px = 22) {
 	svg.setAttribute("stroke-linejoin", "round");
 	// Size goes into the inline style as well: with attributes alone, some WebKit
 	// versions still let a stylesheet collapse it to 0
-	svg.setAttribute("style", `width:${px}px;height:${px}px;display:block;flex:0 0 auto;`);
+	svg.setAttribute("style", `width:${size}px;height:${size}px;display:block;flex:0 0 auto;`);
 	for (const d of ICONS[name]) {
 		const p = document.createElementNS(NS, "path");
 		p.setAttribute("d", d);
