@@ -11,6 +11,8 @@ import type HandwritingPlugin from "./main";
 
 export const VIEW_TYPE = "handwriting-view";
 
+const EDGE_PAD = 12;   // css px
+
 const COLORS = ["#1a1a1a", "#c0392b", "#2d6ca8", "#1a7f37"];
 const SIZES = [4, 8, 14];
 
@@ -207,8 +209,12 @@ export class HandwritingView extends TextFileView {
 
 	/* ================= 尺寸与坐标 ================= */
 
-	/** 缩放 1 时正好一页宽铺满视口 */
-	private get scale() { return (this.surface.clientWidth / PAGE_W) * this.zoom; }
+	/** 缩放 1 时一页宽铺满视口，左右各留 EDGE_PAD 的余量 ——
+	 *  不留的话纸张外框正好压在屏幕最边缘，等于看不见。 */
+	private get scale() {
+		const w = Math.max(this.surface.clientWidth - EDGE_PAD * 2, 80);
+		return (w / PAGE_W) * this.zoom;
+	}
 	private get viewW() { return this.surface.clientWidth / this.scale; }
 	private get viewH() { return this.surface.clientHeight / this.scale; }
 	private contentH() { return this.pages * PAGE_H; }
@@ -350,9 +356,10 @@ export class HandwritingView extends TextFileView {
 		}
 		cx.setLineDash([]);
 
-		// 纸张外框：整个文档一个矩形，超出视口的部分由 canvas 自己裁掉
+		// 纸张外框：整个文档一个矩形，超出视口的部分由 canvas 自己裁掉。
+		// 用 --text-faint 而不是 border 色 —— 后者在深色主题下太淡，看不出纸张边界。
 		cx.lineWidth = 2 / this.scale;
-		cx.strokeStyle = border;
+		cx.strokeStyle = faint;
 		cx.strokeRect(0, 0, PAGE_W, H);
 
 		// 页码
