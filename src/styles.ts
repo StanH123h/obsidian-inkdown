@@ -127,9 +127,14 @@ export const S = {
 		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
 
 	// Segmented control with a highlight pill that slides between the options.
+	// Stacks along the bar's long axis: vertical bar, vertical stack.
 	seg:
 		"position:relative;display:flex;flex:0 0 auto;box-sizing:border-box;" +
 		`border-radius:9px;padding:2px;background:${HOVER};overflow:hidden;`,
+	// Preview of the eraser's actual size, so the number means something
+	eraserPreview:
+		"flex:0 0 auto;border-radius:50%;box-sizing:border-box;" +
+		`border:1.5px dashed ${MUTED};background:rgba(150,150,150,.14);`,
 	segPill:
 		"position:absolute;border-radius:7px;background:var(--background-primary, #fff);" +
 		"box-shadow:0 1px 3px rgba(0,0,0,.16);transition:transform .18s cubic-bezier(.3,.7,.3,1);",

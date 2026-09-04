@@ -333,10 +333,30 @@ export class HandwritingView extends TextFileView {
 					this.plugin.saveSettings();
 				});
 			sep();
+
+			// A number alone says nothing about how big the eraser actually is.
+			// The swatch scales with it, and while the slider moves we also park the
+			// real dashed ring in the middle of the page, at true size.
+			const previewPx = (v: number) => Math.min(8 + v * 0.7, 46);
+			const preview = bar.createDiv({ attr: { style: S.eraserPreview + `width:${previewPx(this.plugin.settings.eraserSize)}px;height:${previewPx(this.plugin.settings.eraserSize)}px;` } });
+			let clearRing = 0;
 			const slider = this.makeSlider(bar, vert, 3, 60,
 				() => this.plugin.settings.eraserSize,
-				(v) => { this.plugin.settings.eraserSize = v; this.redrawLive(); },
-				() => this.plugin.saveSettings());
+				(v) => {
+					this.plugin.settings.eraserSize = v;
+					preview.setAttribute("style", S.eraserPreview + `width:${previewPx(v)}px;height:${previewPx(v)}px;`);
+					window.clearTimeout(clearRing);
+					this.eraserAt = { x: this.panX + this.viewW / 2, y: this.panY + this.viewH / 2 };
+					this.redrawLive();
+				},
+				() => {
+					this.plugin.saveSettings();
+					// Leave the ring up briefly after release so the size registers
+					clearRing = window.setTimeout(() => {
+						this.eraserAt = null;
+						this.redrawLive();
+					}, 900);
+				});
 			this.syncCtx = () => { seg.refresh(); slider.refresh(); };
 			return;
 		}
@@ -346,26 +366,35 @@ export class HandwritingView extends TextFileView {
 	/** Segmented control with a pill that slides to the selected option.
 	 *  Two options sit side by side; in the narrow layout they stack instead. */
 	private makeSegment(
-		parent: HTMLElement, vert: boolean,
+		parent: HTMLElement, stacked: boolean,
 		items: { label: string; value: string }[],
 		get: () => string, set: (v: string) => void,
 	) {
-		const W = vert ? 60 : 108, H = vert ? 30 : 26;
-		const wrap = parent.createDiv({ attr: { style: S.seg + `width:${W}px;height:${H}px;` } });
-		const iw = (W - 4) / items.length;
+		// Stack along the bar's long axis: a vertical bar gets a vertical stack.
+		// Two Chinese labels side by side in a 60px column are unreadably tight.
+		const IW = stacked ? 56 : 52, IH = stacked ? 26 : 26;
+		const W = stacked ? IW + 4 : IW * items.length + 4;
+		const H = stacked ? IH * items.length + 4 : IH + 4;
+		const wrap = parent.createDiv({
+			attr: { style: S.seg + `width:${W}px;height:${H}px;flex-direction:${stacked ? "column" : "row"};` },
+		});
 		const pill = wrap.createDiv({
-			attr: { style: S.segPill + `width:${iw}px;height:${H - 4}px;left:2px;top:2px;` },
+			attr: { style: S.segPill + `width:${IW}px;height:${IH}px;left:2px;top:2px;` },
 		});
 		const els = items.map((it) => {
-			const b = wrap.createEl("button", { text: it.label, attr: { style: S.segItem } });
+			const b = wrap.createEl("button", {
+				text: it.label,
+				attr: { style: S.segItem + `width:${IW}px;height:${IH}px;flex:0 0 auto;` },
+			});
 			b.addEventListener("click", (e) => { e.stopPropagation(); set(it.value); refresh(); });
 			b.addEventListener("pointerdown", (e) => e.stopPropagation());
 			return b;
 		});
 		const refresh = () => {
 			const i = Math.max(0, items.findIndex((it) => it.value === get()));
-			pill.style.transform = `translateX(${i * iw}px)`;
-			els.forEach((b, j) => b.setAttribute("style", S.segItem + (j === i ? S.segItemOn : "")));
+			pill.style.transform = stacked ? `translateY(${i * IH}px)` : `translateX(${i * IW}px)`;
+			els.forEach((b, j) => b.setAttribute(
+				"style", S.segItem + `width:${IW}px;height:${IH}px;flex:0 0 auto;` + (j === i ? S.segItemOn : "")));
 		};
 		refresh();
 		return { refresh };
