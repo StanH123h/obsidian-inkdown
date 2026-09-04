@@ -1,7 +1,7 @@
 import { Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, strokeInRegion, pointInPoly, polyArea, polyBounds, predictTip,
+	distToPoly, drawStroke, erasePrecise, hitStroke, pathToCanvas, strokeInRegion, pointInPoly, polyArea, polyBounds, predictTip, finalizeStroke, strokeChanged, strokeRev,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -968,6 +968,7 @@ export class HandwritingView extends TextFileView {
 			}
 			if (this.tool === "lasso" || this.tool === "wiki") { this.finishLasso(); return; }
 			if (this.cur && this.cur.pts.length) {
+				finalizeStroke(this.cur);
 				this.doc.strokes.push(this.cur);
 				this.undoStack.push({ kind: "stroke-add", index: this.doc.strokes.length - 1 });
 				drawStroke(this.bctx, this.cur, this.opts(), true);
@@ -1224,7 +1225,9 @@ export class HandwritingView extends TextFileView {
 		for (const pt of this.sel.path) { pt[0] += dx; pt[1] += dy; }
 		for (const st of this.sel.strokes) {
 			for (const p of st.pts) { p.x += dx; p.y += dy; }
-			dirtyBox(st);   // point count is unchanged, so the cached bounds must be dropped
+			// The point count is unchanged, so every cache keyed on this stroke --
+			// its bounds and its encoded form -- has to be told
+			strokeChanged(st);
 		}
 	}
 
@@ -1489,7 +1492,7 @@ export class HandwritingView extends TextFileView {
 			case "sel-move":
 				for (const st of e.strokes) {
 					for (const p of st.pts) { p.x -= e.dx; p.y -= e.dy; }
-					dirtyBox(st);
+					strokeChanged(st);
 				}
 				break;
 			case "region-move": {
@@ -1550,26 +1553,22 @@ export class HandwritingView extends TextFileView {
 	}
 }
 
-/** Drop a stroke's cached bounds. Moving a selection changes coordinates without
- *  changing the point count, which is what the cache keys on. */
-function dirtyBox(st: Stroke) { (st as unknown as { _n?: number })._n = -1; }
-
 /** Stroke bounding box, cached on the stroke, used to cull ink outside the
  *  viewport in a multi-page document. */
-const bboxCache = new WeakMap<Stroke, { x0: number; x1: number; y0: number; y1: number }>();
+const bboxCache = new WeakMap<Stroke, { rev: number; n: number; box: { x0: number; x1: number; y0: number; y1: number } }>();
 function bboxOf(st: Stroke) {
-	let b = bboxCache.get(st);
-	if (b && (st as unknown as { _n?: number })._n === st.pts.length) return b;
+	const hit = bboxCache.get(st);
+	const rev = strokeRev(st), n = st.pts.length;
+	if (hit && hit.rev === rev && hit.n === n) return hit.box;
 	let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
 	for (const p of st.pts) {
 		if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
 		if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
 	}
-	b = {
+	const box = {
 		x0: isFinite(x0) ? x0 : 0, x1: isFinite(x1) ? x1 : 0,
 		y0: isFinite(y0) ? y0 : 0, y1: isFinite(y1) ? y1 : 0,
 	};
-	bboxCache.set(st, b);
-	(st as unknown as { _n?: number })._n = st.pts.length;
-	return b;
+	bboxCache.set(st, { rev, n, box });
+	return box;
 }

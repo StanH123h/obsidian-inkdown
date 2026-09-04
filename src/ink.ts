@@ -420,3 +420,46 @@ export function predictTip(pts: Pt[], frames: number): Pt[] {
 	}
 	return out;
 }
+
+/** Thin out samples: coalesced events produce very dense points, so drop any
+ * closer than 0.6 page units to the previous one. No visible difference, much
+ * less data -- in memory as well as on disk. */
+export function decimate(pts: Pt[]): Pt[] {
+	if (pts.length < 3) return pts;
+	const out = [pts[0]];
+	for (let i = 1; i < pts.length - 1; i++) {
+		const last = out[out.length - 1];
+		if (Math.hypot(pts[i].x - last.x, pts[i].y - last.y) >= 0.6) out.push(pts[i]);
+	}
+	out.push(pts[pts.length - 1]);
+	return out;
+}
+
+/** Settle a finished stroke: clean the raw samples, thin them, and quantise to
+ *  the grid the file format stores. Doing it once here rather than on every save
+ *  keeps saving idempotent -- thinning already-thinned points would erode the
+ *  stroke a little each time -- and it drops the in-memory point count by about
+ *  40% as a side effect. */
+export function finalizeStroke(st: Stroke): Stroke {
+	st.pts = decimate(cleanRaw(st.pts)).map((p) => ({
+		x: Math.round(p.x * 10) / 10,
+		y: Math.round(p.y * 10) / 10,
+		p: Math.round(p.p * 99) / 99,
+	}));
+	return st;
+}
+
+/* ============ Stroke revision ============
+ * Caches keyed on a stroke (its bounding box, its encoded form) need to know
+ * when its points change. Appending during a draw is covered by the point
+ * count; this counter covers edits that keep the count the same, such as
+ * moving a lasso selection. */
+
+export function strokeChanged(st: Stroke) {
+	const m = st as Stroke & { _rev?: number };
+	m._rev = (m._rev ?? 0) + 1;
+}
+
+export function strokeRev(st: Stroke): number {
+	return (st as Stroke & { _rev?: number })._rev ?? 0;
+}

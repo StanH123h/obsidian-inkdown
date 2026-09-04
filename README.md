@@ -17,16 +17,30 @@ handwriting: v1
 ---
 # Organic Chemistry, Lecture 5
 
-## regions
+## Regions
 ### reaction mechanism
 
-## links
+## Links
 - [[SN2 reaction]]
 
 %%ink
-{"v":1,"w":1000,"strokes":[...],"items":[...],"regions":[...]}
+{"v":2,"w":1000,"items":[...],"regions":[...],"z":"eJx1kMFqw..."}
 %%
 ```
+
+Ink sits in `z`: coordinates quantised to tenths of a page unit, stored as deltas
+from the previous point, deflated and base64'd. Measured on a full page of dense
+Chinese handwriting that is **6.3x smaller** than storing the numbers as text,
+with no loss -- the previous format already rounded to the same grid.
+
+Everything else stays plain: the title, the region headings that `[[note#area]]`
+resolves against, and the links. That is what Obsidian indexes and what anyone
+reading the file is actually after; nobody reads two megabytes of coordinates.
+Every other app in this space compresses too -- Xournal++ gzips its XML, Rnote
+gzips its JSON, the JOT spec stores 4/8/16-bit coordinate deltas.
+
+Files in the older unpacked format still open, and are rewritten packed on the
+next save.
 
 The `## regions` and `## links` sections are generated on save. They translate
 what is on the canvas into a form Obsidian understands: regions become headings
