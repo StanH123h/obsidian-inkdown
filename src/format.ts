@@ -29,14 +29,7 @@
 import { App, TFile } from "obsidian";
 import { PAGE_W, Region, Stroke, cleanRaw } from "./ink";
 
-/** 画布上的 wiki link 元素。
- *
- *  这个功能当前**没有启用** —— 联动的方向定为「普通文档引用手写内容」，
- *  而不是「手写画布里塞文档」。前者靠区域 + markdown 后处理器已经能用，
- *  后者只会把复杂度堆在画布上。
- *
- *  这里保留读写是为了**不丢数据**：老文件里可能已经存了 items，
- *  原样读进来、原样写回去，将来这个功能单独做的时候能直接接上。 */
+/** 画布上的一个 wiki link 元素 */
 export interface LinkItem {
 	id: string;
 	x: number;          // 页面单位
@@ -126,6 +119,13 @@ export function serialize(doc: HwDoc): string {
 	if (doc.regions.length) {
 		out.push("## 区域", "");
 		for (const r of doc.regions) if (r.name) out.push(`### ${r.name}`, "");
+	}
+
+	const links = doc.items.filter((i) => i.target.trim());
+	if (links.length) {
+		out.push("## 链接", "");
+		for (const i of links) out.push(`- ${i.embed ? "!" : ""}[[${i.target}]]`);
+		out.push("");
 	}
 
 	const json = {

@@ -58,6 +58,25 @@ function strokesBox(strokes: Stroke[]): Box {
 	return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+/** 把解析结果画进画布上的嵌入框。
+ *
+ *  只接受手写内容 —— 画布上的 wiki link 只能引用另一篇手写笔记或者某个圈，
+ *  不能引用普通 markdown 文档。这样手写画布始终只显示"画出来的东西"，
+ *  不会变成一个嵌套渲染文档的容器（见 README 的「设计原则：不嵌套」）。 */
+export function renderResolved(
+	container: HTMLElement, r: Resolved, cssWidth: number, opt: InkOpts,
+): void {
+	container.empty();
+	const warn = (text: string) => container.createSpan({
+		text,
+		attr: { style: "color:var(--text-error,#c0392b);font-size:15px;" },
+	});
+	if (r.kind === "missing") { warn(`未找到：${r.label}`); return; }
+	if (r.kind === "md") { warn("只能引用手写内容，普通文档不能嵌在画布上"); return; }
+	const cv = container.createEl("canvas", { attr: { style: "display:block;max-width:100%;" } });
+	paintInk(cv, r.strokes, opt, r.box, cssWidth, r.clip);
+}
+
 /* ================= 普通笔记里的 ![[某手写笔记]] ================= */
 
 class InkEmbed extends MarkdownRenderChild {

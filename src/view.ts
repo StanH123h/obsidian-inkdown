@@ -3,8 +3,9 @@ import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
 	distToPoly, drawStroke, hitStroke, pathToCanvas, pointInPoly, polyArea, polyBounds, predictTip, strokeInRegion,
 } from "./ink";
-import { HwDoc, newId, parse, sanitizeName, serialize } from "./format";
-import { NameRegionModal } from "./modals";
+import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
+import { renderResolved, resolveTarget } from "./embed";
+import { LinkModal, NameRegionModal } from "./modals";
 import { ICONS, S, drawIcon } from "./styles";
 import type HandwritingPlugin from "./main";
 
@@ -20,6 +21,8 @@ type Tool = "pen" | "eraser" | "lasso";
 type UndoEntry =
 	| { kind: "stroke-add"; index: number }
 	| { kind: "stroke-del"; items: { index: number; stroke: Stroke }[] }
+	| { kind: "item-add"; id: string }
+	| { kind: "item-del"; index: number; item: LinkItem }
 	| { kind: "region-add"; id: string }
 	| { kind: "region-del"; index: number; region: Region }
 	| { kind: "region-move"; id: string; dx: number; dy: number; strokes: number[] };
@@ -205,6 +208,7 @@ export class HandwritingView extends TextFileView {
 		sep();
 
 		btn("fit", "适应页宽（重置缩放）", () => this.fitWidth());
+		btn("link", "插入 wiki 链接", () => this.addLink());
 		btn("undo", "撤销", () => this.undo());
 		btn("code", "看 Markdown 源码", () => this.plugin.toMarkdown(this.leaf));
 
@@ -275,6 +279,7 @@ export class HandwritingView extends TextFileView {
 	private recountPages() {
 		let maxY = 0;
 		for (const st of this.doc.strokes) for (const p of st.pts) if (p.y > maxY) maxY = p.y;
+		for (const it of this.doc.items) maxY = Math.max(maxY, it.y + 60);
 		for (const g of this.doc.regions) {
 			const b = polyBounds(g.path);
 			maxY = Math.max(maxY, b.y + b.h);
@@ -861,6 +866,39 @@ export class HandwritingView extends TextFileView {
 
 	/* ================= 画布上的元素层 ================= */
 
+	private addLink() {
+		const item: LinkItem = {
+			id: newId(),
+			x: this.panX + this.viewW * 0.15,
+			y: this.panY + this.viewH * 0.3,
+			w: 420,
+			target: "",
+			embed: false,
+		};
+		this.doc.items.push(item);
+		this.undoStack.push({ kind: "item-add", id: item.id });
+		this.editItem(item, true);
+	}
+
+	private editItem(item: LinkItem, isNew = false) {
+		new LinkModal(this.app, { target: item.target, embed: item.embed }, (v) => {
+			if (!v.target && isNew) { this.removeItem(item.id, false); return; }
+			item.target = v.target;
+			item.embed = v.embed;
+			this.rebuildOverlay();
+			this.requestSave();
+		}, () => this.removeItem(item.id, true)).open();
+	}
+
+	private removeItem(id: string, record: boolean) {
+		const i = this.doc.items.findIndex((x) => x.id === id);
+		if (i < 0) return;
+		if (record) this.undoStack.push({ kind: "item-del", index: i, item: this.doc.items[i] });
+		this.doc.items.splice(i, 1);
+		this.rebuildOverlay();
+		this.requestSave();
+	}
+
 	private syncOverlayTransform() {
 		if (!this.overlay) return;
 		const s = this.scale;
@@ -877,6 +915,7 @@ export class HandwritingView extends TextFileView {
 		this.overlay.empty();
 		this.counterScaled = [];
 		for (const g of this.doc.regions) this.renderRegionTag(g);
+		for (const it of this.doc.items) this.renderItem(it);
 		this.syncOverlayTransform();
 	}
 
@@ -951,6 +990,58 @@ export class HandwritingView extends TextFileView {
 		});
 	}
 
+	private renderItem(it: LinkItem) {
+		if (!it.embed) {
+			const chip = this.overlay.createDiv({
+				text: it.target ? `[[${it.target}]]` : "[[空链接]]",
+				attr: { style: it.target ? S.chip : S.chipMissing },
+			});
+			chip.style.left = it.x + "px";
+			chip.style.top = it.y + "px";
+			this.wireItem(chip, chip, it);
+			return;
+		}
+
+		const boxEl = this.overlay.createDiv({ attr: { style: S.embedBox } });
+		boxEl.style.left = it.x + "px";
+		boxEl.style.top = it.y + "px";
+		boxEl.style.width = it.w + "px";
+
+		const bar = boxEl.createDiv({ attr: { style: S.embedBar } });
+		bar.createSpan({ text: `![[${it.target || "空链接"}]]` });
+		const body = boxEl.createDiv({ attr: { style: S.embedBody } });
+		this.wireItem(boxEl, bar, it);
+
+		resolveTarget(this.app, it.target, this.file?.path ?? "").then((r) =>
+			renderResolved(body, r, it.w - 26, this.opts()),
+		);
+	}
+
+	/** 拖动移动；轻点打开编辑 */
+	private wireItem(root: HTMLElement, handle: HTMLElement, it: LinkItem) {
+		let sx = 0, sy = 0, ox = 0, oy = 0, moved = false;
+		handle.addEventListener("pointerdown", (e: PointerEvent) => {
+			e.stopPropagation();
+			e.preventDefault();
+			handle.setPointerCapture(e.pointerId);
+			sx = e.clientX; sy = e.clientY; ox = it.x; oy = it.y; moved = false;
+		});
+		handle.addEventListener("pointermove", (e: PointerEvent) => {
+			if (!handle.hasPointerCapture(e.pointerId)) return;
+			const dx = (e.clientX - sx) / this.scale, dy = (e.clientY - sy) / this.scale;
+			if (Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) > 4) moved = true;
+			it.x = ox + dx; it.y = oy + dy;
+			root.style.left = it.x + "px";
+			root.style.top = it.y + "px";
+		});
+		handle.addEventListener("pointerup", (e: PointerEvent) => {
+			if (!handle.hasPointerCapture(e.pointerId)) return;
+			handle.releasePointerCapture(e.pointerId);
+			if (moved) this.requestSave();
+			else this.editItem(it);
+		});
+	}
+
 	/* ================= 撤销 ================= */
 
 	undo() {
@@ -959,6 +1050,8 @@ export class HandwritingView extends TextFileView {
 		switch (e.kind) {
 			case "stroke-add": this.doc.strokes.splice(e.index, 1); break;
 			case "stroke-del": for (const it of [...e.items].reverse()) this.doc.strokes.splice(it.index, 0, it.stroke); break;
+			case "item-add": this.doc.items = this.doc.items.filter((x) => x.id !== e.id); break;
+			case "item-del": this.doc.items.splice(e.index, 0, e.item); break;
 			case "region-add": this.doc.regions = this.doc.regions.filter((x) => x.id !== e.id); break;
 			case "region-del": this.doc.regions.splice(e.index, 0, e.region); break;
 			case "region-move": {
@@ -1005,7 +1098,7 @@ export class HandwritingView extends TextFileView {
 				? (1000 * (this.evtStamps.length - 1) /
 					(this.evtStamps[this.evtStamps.length - 1] - this.evtStamps[0])).toFixed(0) + " Hz"
 				: "先写一笔",
-			"笔迹 / 区域": `${this.doc.strokes.length} / ${this.doc.regions.length}`,
+			"笔迹 / 元素 / 区域": `${this.doc.strokes.length} / ${this.doc.items.length} / ${this.doc.regions.length}`,
 		};
 	}
 
