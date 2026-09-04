@@ -9,6 +9,9 @@ import { LinkModal, NameRegionModal } from "./modals";
 import { ICONS, S, drawIcon } from "./styles";
 import type HandwritingPlugin from "./main";
 
+/** Injected by esbuild at build time; see esbuild.config.mjs */
+declare const __HW_VERSION__: string;
+
 export const VIEW_TYPE = "handwriting-view";
 
 const EDGE_PAD = 12;   // css px
@@ -217,8 +220,10 @@ export class HandwritingView extends TextFileView {
 		btn("code", "看 Markdown 源码", () => this.plugin.toMarkdown(this.leaf));
 
 		// The version is printed on the toolbar: when debugging across iCloud it is
-		// the fastest way to confirm which build is actually running
-		bar.createDiv({ text: "v" + this.plugin.manifest.version, attr: { style: S.version } });
+		// the fastest way to confirm which build is actually running. It comes from
+		// the bundle, not from manifest.json, because those are separate files and
+		// a sync service can deliver them at different times.
+		bar.createDiv({ text: "v" + __HW_VERSION__, attr: { style: S.version } });
 
 		const sync = () => {
 			penBtn.setAttribute("style", this.tool === "pen" ? S.btnOn : S.btn);
@@ -1114,6 +1119,7 @@ export class HandwritingView extends TextFileView {
 			"root 尺寸": `${root.clientWidth} x ${root.clientHeight}`,
 			"tools 尺寸": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
 			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
+			"代码版本 / manifest": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
 			"窄屏模式": String(this.narrow),
 			"上次点击判定": this.lastHitInfo,
 			"上次手指按下": this.lastTouchInfo,
