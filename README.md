@@ -1,97 +1,132 @@
 # Obsidian Handwriting
 
-给 Obsidian 加一套手写笔记系统。目标不是"能在 Obsidian 里写字"，而是让手写内容
-**长在 Obsidian 的语义里** —— wiki link、反链、图谱、全局搜索、块引用全部照常工作。
+A handwriting system for Obsidian. The goal is not "write by hand inside
+Obsidian" but to make handwritten content **live inside Obsidian's semantics** —
+wiki links, backlinks, the graph, global search and block references all keep
+working on it.
 
-## 文件格式
+## File format
 
-手写笔记就是**普通的 `.md` 文件**，靠 frontmatter 里的 `handwriting` 标记识别。
-笔迹数据藏在 `%%ink ... %%` 注释里（Obsidian 的注释语法，任何视图都不显示）。
-
-用普通 `.md` 而不是 `.hw.md` 这种复合后缀，是因为后者在 Obsidian 眼里 basename
-是「BBB.hw」（扩展名只认最后一个 `.md`）。后果不只是 `[[BBB]]` 解析不到 ——
-文件列表、链接补全、搜索、图谱里到处显示 `BBB.hw`；更糟的是 `BBB.md` 和
-`BBB.hw.md` 可以共存，Obsidian 认为是两个文件，而"文件名唯一"这条保证正是
-`[[文件#区域]]` 寻址方案的前提。保持原生还有个额外好处：Obsidian 以后加的
-新能力能直接用上，不用为自定义后缀做适配。
-
-旧的 `.hw.md` 文件仍按路径识别，命令面板里有「迁移：把 .hw.md 重命名为 .md」，
-走 `fileManager.renameFile` 所以指向它们的链接会自动跟着改。
+A handwriting note is an **ordinary `.md` file**, identified by the
+`handwriting` key in its frontmatter. Ink hides inside `%%ink ... %%`
+(Obsidian's comment syntax, which never renders).
 
 ```markdown
 ---
 handwriting: v1
 ---
-# 有机化学 Lecture 5
+# Organic Chemistry, Lecture 5
 
-## 区域
-### 反应机理图
+## regions
+### reaction mechanism
 
-## 链接
-- [[SN2 反应]]
+## links
+- [[SN2 reaction]]
 
 %%ink
 {"v":1,"w":1000,"strokes":[...],"items":[...],"regions":[...]}
 %%
 ```
 
-`## 区域` 和 `## 链接` 两段由插件在保存时生成，作用是把画布上的东西翻译成
-Obsidian 看得懂的形式：区域进标题索引（于是 `[[本文件#区域名]]` 能解析、能自动
-补全、能进反链），链接进链接索引（于是进反链和图谱）。
+The `## regions` and `## links` sections are generated on save. They translate
+what is on the canvas into a form Obsidian understands: regions become headings
+(so `[[this file#region name]]` resolves, autocompletes and shows up in
+backlinks), and canvas links become real links (so backlinks and the graph pick
+them up).
 
-## 设计原则：不嵌套
+Plain `.md` rather than a compound `.hw.md` suffix, because Obsidian reads such
+a file's basename as `BBB.hw` — only the final `.md` counts as the extension.
+The damage is not limited to `[[BBB]]` failing to resolve: `BBB.hw` then shows
+up throughout the file list, link autocomplete, search results and graph nodes.
+Worse, `BBB.md` and `BBB.hw.md` can coexist as two distinct files, and
+"filenames are unique" is exactly the guarantee the `[[file#region]]` addressing
+scheme rests on. Staying native has a second benefit: whatever Obsidian adds
+later works here without adapting anything to a custom suffix.
 
-**原生内容渲染，引用不渲染。一层就是一层。**
+Older `.hw.md` files are still recognised by path. The command palette has
+*migrate: rename .hw.md to .md*, which goes through `fileManager.renameFile` so
+links to those files are updated automatically.
 
-引用一个区域（`![[笔记#区域名]]`）时，只渲染那篇笔记**自己的内容**：
+## Design principle: no nesting
+
+**Own content renders, references do not. One level deep.**
+
+Embedding a region (`![[note#region name]]`) renders only that note's **own
+content**:
 
 | | |
 |---|---|
-| 笔迹 | ✅ 渲染 |
-| 文本框（计划中） | ✅ 渲染 |
-| 嵌套在里面的圈 | ❌ 不渲染 |
-| 指向别处文档的 wiki link / 嵌入 | ❌ 不渲染 |
+| ink | rendered |
+| text boxes (planned) | rendered |
+| regions nested inside it | not rendered |
+| wiki links pointing elsewhere | not rendered |
 
-分界线不是"文字 vs 图形"，而是**"这是这篇笔记自己的内容，还是一个指向别处的引用"**。
-文本框是自己的内容，所以要渲染；wiki link 是引用，所以不渲染 —— 不管它显示的
-是文字还是别的圈。
+The line is not "text vs graphics" but **"is this the note's own content, or a
+reference to somewhere else"**. A text box will be its own content and gets
+rendered; a wiki link is a reference and does not, whatever it happens to
+display.
 
-这条规则同时也保证了引用不会形成链、不会循环、不会因为改了远处某篇笔记就让这里的
-显示跟着变。圈是画布上的一块**叶子**，不是一个分支。
+**A wiki link on the canvas may only point at handwriting** — another
+handwriting note, or one of its regions — never at an ordinary markdown
+document. The canvas then always shows things that were drawn, and never
+becomes a container that nests rendered documents.
 
-（例外：画布上的文档嵌入元素本身是交给 Obsidian 的 `MarkdownRenderer` 渲染的，
-那篇文档内部的嵌套按 Obsidian 自己的规则来 —— 那是平台行为，我们不去干预。）
+The direction is deliberately asymmetric:
 
-## 功能
+- ordinary document → handwriting: **allowed** (`![[note#region]]`, rendered by
+  the markdown post-processor)
+- handwriting canvas → handwriting: **allowed** (canvas wiki-link items)
+- handwriting canvas → ordinary document: **not allowed**
 
-- 压感手写（Apple Pencil），1€ 滤波 + 笔尖预测降低感知延迟
-- 套索圈选一块内容并命名，别处用 `![[笔记#区域名]]` 直接嵌入那块手写内容
-- 画布上的 wiki link 元素，可直接显示目标笔记的内容
-- 多页（始终留一页空白）、滚动、捏合缩放
-- 笔写字、手指滚动，写字时自动屏蔽手掌
+Handwriting-to-handwriting references cannot form chains either: an embed
+renders only the target's ink, not the wiki-link items on the target's own
+canvas. Every reference expands exactly one level.
 
-## 开发
+Together this keeps references from forming chains or cycles, and stops a
+distant edit from silently changing what is displayed here. A region is a
+**leaf** on the canvas, not a branch.
+
+## Features
+
+- Pressure-sensitive ink (Apple Pencil), one-euro filter and tip prediction to
+  cut perceived latency
+- Lasso a piece of content and name it; elsewhere `![[note#region name]]` embeds
+  that ink directly
+- Wiki-link items on the canvas that can display the target handwriting inline
+- Multiple pages (one blank page is always kept), scrolling, pinch zoom
+- Pen writes, finger manipulates; palm contact is ignored while the pen is down
+
+## Development
 
 ```bash
 npm install
-npm run dev     # esbuild watch，构建产物按 .dev-targets 自动部署到测试库
+npm run dev     # esbuild watch; output is deployed per .dev-targets
 npm run build
+npm test
 ```
 
-`.dev-targets` 每行一个 Obsidian 插件目录（该文件不进版本库）。
+`.dev-targets` holds one Obsidian plugin directory per line and is not tracked.
+After cloning on a new machine, recreate it, otherwise `npm run build` will
+build without deploying.
 
-移动端没有 devtools，所以：**每次改动都提升 `manifest.json` 的版本号**，工具栏
-底部会显示 `v0.x.y`；命令面板里有「Handwriting: 诊断信息」报告运行时状态。
+There are no devtools on mobile, so: **bump the version in `manifest.json` on
+every change** — the toolbar prints `v0.x.y` at the bottom — and use the
+*Handwriting: diagnostics* command, which reports runtime state.
 
-## 渲染算法的三条硬约束
+## Three hard invariants in the renderer
 
-笔迹渲染踩过三个坑，都有对应的测试（见 `docs/rendering.md` 里的说明）：
+Stroke rendering has stepped on three landmines, each with a test
+(see `docs/rendering.md`):
 
-1. **绕数不能抵消** —— 所有子路径同向，nonzero 下才是并集而不是异或，否则出洞
-2. **子路径不能自交** —— 梯形用"该段自己的法线"构造，凸的；用两端点各自的法线
-   会在急转处拧成蝴蝶结，两瓣绕向相反
-3. **覆盖必须等于真实笔迹区域** —— 每个采样点都补圆盘，只在大转角补的话噪声会让
-   相邻两段方向差 90° 以上，外侧留下肉眼可见的楔形缺口
+1. **Winding must not cancel** — every subpath is wound the same way, so nonzero
+   fill produces a union rather than an xor; otherwise the stroke grows holes
+2. **Subpaths must not self-intersect** — a trapezoid is built from its own
+   segment's normal, which makes it convex; using each endpoint's normal twists
+   it into a bowtie at sharp turns, and the two lobes wind in opposite
+   directions
+3. **Coverage must equal the true stroke region** — a disc goes at every sample
+   point; adding them only at large turns leaves visible wedge notches, because
+   noise makes consecutive segment directions differ by more than 90 degrees
 
 ## License
 

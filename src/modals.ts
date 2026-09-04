@@ -1,7 +1,7 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { isHandwritingFile, parse, sanitizeName } from "./format";
 
-/* ================= 给区域命名 ================= */
+/* ============ Naming a region ============ */
 
 export class NameRegionModal extends Modal {
 	private value = "";
@@ -38,7 +38,8 @@ export class NameRegionModal extends Modal {
 	private submit() {
 		const name = sanitizeName(this.value);
 		if (!name) { new Notice("名字不能为空"); return; }
-		// 同名标题在 Obsidian 里是"第一个赢、后面的静默失效"，太隐蔽了，这里直接拒绝
+		// Obsidian resolves duplicate headings as "first one wins, the rest fail
+		// silently", which is far too easy to miss, so reject duplicates outright
 		if (this.taken.includes(name)) { new Notice(`已经有一个区域叫「${name}」了`); return; }
 		this.cancelled = false;
 		this.onDone(name);
@@ -51,7 +52,7 @@ export class NameRegionModal extends Modal {
 	}
 }
 
-/* ================= 编辑一个 wiki link ================= */
+/* ============ Editing a wiki link ============ */
 
 export interface LinkEdit { target: string; embed: boolean }
 
@@ -100,7 +101,7 @@ export class LinkModal extends Modal {
 		setTimeout(() => { input?.focus(); input?.select(); }, 30);
 	}
 
-	/** 打了 # 就列目标手写笔记的区域，否则列文件 */
+	/** After a #, list the regions of the target note; otherwise list files */
 	private refresh() {
 		this.listEl.empty();
 		const q = this.target.trim();
@@ -123,7 +124,7 @@ export class LinkModal extends Modal {
 			if (isHandwritingFile(this.app, f)) {
 				const needle = q.slice(hash + 1).toLowerCase();
 				this.app.vault.cachedRead(f).then((data) => {
-					if (this.target.trim() !== q) return;      // 输入已经变了
+					if (this.target.trim() !== q) return;      // the input has changed since
 					this.listEl.empty();
 					for (const r of parse(data).regions) {
 						if (!r.name.toLowerCase().includes(needle)) continue;
@@ -134,7 +135,8 @@ export class LinkModal extends Modal {
 			}
 		}
 
-		// 只列手写笔记 —— 画布上的 wiki link 只能引用手写内容，普通文档不在候选里
+		// Handwriting notes only: a wiki link on the canvas can only reference
+		// handwriting, so ordinary documents are not offered
 		const needle = (hash >= 0 ? q.slice(0, hash) : q).toLowerCase();
 		const files = this.app.vault.getMarkdownFiles()
 			.filter((f) => isHandwritingFile(this.app, f))
@@ -156,7 +158,8 @@ export class LinkModal extends Modal {
 		}
 	}
 
-	/** 选中候选后回填输入框并刷新（不关闭弹窗，方便接着选区域） */
+	/** Fill the input from a suggestion and refresh, without closing the dialog so
+	 *  a region can be picked next */
 	private close2() {
 		const input = this.contentEl.querySelector("input[type=text]") as HTMLInputElement | null;
 		if (input) input.value = this.target;

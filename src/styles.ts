@@ -1,11 +1,15 @@
-/* 全部样式都以内联形式写在元素上，插件不注入任何 CSS、也不带 styles.css。
+/* Every style is written inline on the element. The plugin injects no CSS and
+ * ships no styles.css.
  *
- * 为什么：注入到 document.head 的 <style> 在 Obsidian 移动端不生效（实测：
- * 桌面端正常，iPad 上布局和图标尺寸全部丢失）。独立的 styles.css 又有另一个
- * 问题——它跟 main.js 是两个文件，走 iCloud/网盘同步时可能不同时到达。
- * 内联样式优先级高于任何样式表，且随 main.js 一起走，两个坑一次绕开。
+ * Why: a <style> injected into document.head has no effect on Obsidian mobile
+ * (measured: fine on desktop, layout and icon sizes both lost on iPad). A
+ * separate styles.css has a different problem -- it is a second file next to
+ * main.js, and over iCloud or another sync service the two may not arrive
+ * together. Inline styles outrank any stylesheet and travel with main.js,
+ * which sidesteps both traps at once.
  *
- * 颜色仍然走 CSS 变量并带兜底值，这样主题切换照常生效。 */
+ * Colours still go through CSS variables with fallbacks, so theme switching
+ * keeps working. */
 
 const MUTED = "var(--text-muted, #6b6b6b)";
 const ACCENT = "var(--text-accent, #5b6ed6)";
@@ -31,7 +35,8 @@ export const S = {
 	canvas: "position:absolute;inset:0;touch-action:none;",
 
 	tools:
-		// flex-wrap + 固定高度 = 装不下时自动换到第二列，不会有按钮被藏起来
+		// flex-wrap plus a fixed height wraps into a second column when the buttons
+		// do not fit, instead of hiding them in a scroll area
 		"display:flex;flex-direction:column;flex-wrap:wrap;align-items:center;" +
 		"align-content:flex-start;justify-content:flex-start;" +
 		`gap:6px;flex:0 0 auto;height:100%;padding:10px 8px;margin:0;box-sizing:border-box;` +
@@ -49,8 +54,9 @@ export const S = {
 	sep: `flex:0 0 auto;width:22px;height:1px;margin:5px 0;background:${BORDER};`,
 	sepNarrow: `flex:0 0 auto;width:1px;height:22px;margin:0 5px;background:${BORDER};`,
 
-	// 元素层用一个 CSS transform 跟随平移/缩放，子元素坐标直接用内容单位 ——
-	// 滚动时只改一个 transform，不用逐个重排，也不用重新渲染嵌入内容
+	// The overlay follows pan and zoom through a single CSS transform, and its
+	// children are positioned in content units. Scrolling then updates one
+	// transform instead of repositioning every child or re-rendering embeds.
 	overlayClip: "position:absolute;inset:0;pointer-events:none;overflow:hidden;",
 	overlay: "position:absolute;left:0;top:0;width:0;height:0;transform-origin:0 0;",
 	scrollbar:
@@ -75,8 +81,8 @@ export const S = {
 		"font-size:16px;background:var(--background-secondary,rgba(127,127,127,.08));" +
 		`color:${MUTED};touch-action:none;`,
 	embedBody: "padding:10px 13px;font-size:18px;",
-	// 区域的浮动条。定位用内容单位，但自身做反向缩放，
-	// 这样放大画布时按钮不会跟着变成巨无霸。
+	// Floating bar for a region. Positioned in content units but counter-scaled,
+	// so the buttons do not turn into giants when the canvas is zoomed in.
 	regionBar:
 		"position:absolute;display:flex;align-items:center;gap:2px;pointer-events:auto;" +
 		"transform-origin:0 0;white-space:nowrap;border-radius:9px;padding:2px;" +
@@ -110,8 +116,9 @@ export const S = {
 		(on ? `box-shadow:0 0 0 2px ${ACCENT};` : ""),
 };
 
-/* 图标是内联 SVG，不用 Obsidian 的 setIcon（图标名在不同版本/平台上不保证存在），
- * 而且 width/height 直接写成属性 + 内联样式，不靠样式表给尺寸。 */
+/* Icons are inline SVG rather than Obsidian's setIcon, whose icon names are not
+ * guaranteed to exist across versions and platforms. Width and height are set
+ * as attributes and inline styles, never left to a stylesheet. */
 export const ICONS = {
 	pen: [
 		"M4 20l4.5-1.2 9.3-9.3-3.3-3.3-9.3 9.3z",
@@ -150,7 +157,8 @@ export function drawIcon(el: HTMLElement, name: keyof typeof ICONS, px = 22) {
 	svg.setAttribute("stroke-width", "1.9");
 	svg.setAttribute("stroke-linecap", "round");
 	svg.setAttribute("stroke-linejoin", "round");
-	// 尺寸同时写进内联样式：只有属性时，某些 WebKit 版本仍会被样式表覆盖成 0
+	// Size goes into the inline style as well: with attributes alone, some WebKit
+	// versions still let a stylesheet collapse it to 0
 	svg.setAttribute("style", `width:${px}px;height:${px}px;display:block;flex:0 0 auto;`);
 	for (const d of ICONS[name]) {
 		const p = document.createElementNS(NS, "path");

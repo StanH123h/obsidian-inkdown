@@ -54,31 +54,34 @@ export class HandwritingView extends TextFileView {
 	private size = SIZES[1];
 	private undoStack: UndoEntry[] = [];
 
-	/** 当前选中的区域 id。选中后才能拖动，点空白处取消。 */
+	/** Id of the selected region. Tap empty space to clear it. */
 	private selRegion: string | null = null;
 	private regionDrag: { id: string; ox: number; oy: number; dx: number; dy: number; moved: boolean } | null = null;
-	/** 需要做反向缩放的浮动 UI（放大画布时按钮不该跟着变大） */
+	/** Floating UI that must be counter-scaled: buttons should not grow with zoom */
 	private counterScaled: HTMLElement[] = [];
-	/** 选项条是否展开。只有长按才展开，普通点击只负责选中。 */
+	/** Whether the option bar is open. Only a long press opens it; a plain tap
+	 *  just selects. */
 	private showOpts = false;
-	/** 轻点判定：按下时记录，移动超过阈值就作废（那是笔画或平移，不是点击） */
+	/** Tap detection: recorded on press, discarded once movement passes the
+	 *  threshold, because that is a stroke or a pan rather than a tap */
 	private tap: { x: number; y: number; finger: boolean } | null = null;
 	private lpTimer = 0;
 	private panMoved = false;
-	/** 手指按在了某个已选中的圈上，等移动超过死区再真正开始拖 */
+	/** A finger is resting on a region; the drag starts once it leaves the dead zone */
 	private fingerOn: { id: string; x: number; y: number } | null = null;
 
-	/* 视口：缩放 + 平移。笔迹坐标始终是内容单位，跟屏幕无关。 */
+	/* Viewport: zoom and pan. Ink coordinates are always content units,
+	   independent of the screen. */
 	private zoom = 1;
 	private panX = 0;
 	private panY = 0;
 	private pages = 2;
 
-	/** 正在触屏上的手指。笔用来写，手指用来滚 —— 跟 Notability 一样。 */
+	/** Fingers currently on the screen. Pen writes, finger scrolls, as in Notability. */
 	private touches = new Map<number, { x: number; y: number }>();
 	private pinch: { d: number; cx: number; cy: number; zoom: number } | null = null;
 	private panFrom: { x: number; y: number } | null = null;
-	/** 最近几次平移的采样，抬手时用来估算甩动速度 */
+	/** Recent pan samples, used to estimate flick velocity when the finger lifts */
 	private velSamples: { t: number; x: number; y: number }[] = [];
 	private glideRaf = 0;
 	private clip!: HTMLDivElement;
@@ -94,7 +97,7 @@ export class HandwritingView extends TextFileView {
 	getIcon() { return "pen-tool"; }
 	getDisplayText() { return this.file?.basename.replace(/\.hw$/, "") ?? "手写笔记"; }
 
-	/* ================= TextFileView 约定 ================= */
+	/* ============ TextFileView contract ============ */
 
 	getViewData(): string { return serialize(this.doc); }
 
@@ -114,7 +117,7 @@ export class HandwritingView extends TextFileView {
 		this.lasso = null;
 	}
 
-	/* ================= 生命周期 ================= */
+	/* ============ Lifecycle ============ */
 
 	async onOpen() {
 		const root = this.contentEl;
@@ -130,8 +133,9 @@ export class HandwritingView extends TextFileView {
 			this.overlay = this.clip.createDiv({ attr: { style: S.overlay } });
 			this.sbar = this.surface.createDiv({ attr: { style: S.scrollbar } });
 			this.bctx = this.base.getContext("2d")!;
-			// desynchronized：跳过常规的 DOM 合成，画布缓冲尽量直送显示控制器。
-			// 只对正在写的那一层用 —— 延迟只在这层有意义，底层反而要稳定。
+			// desynchronized skips the usual DOM compositing and sends the canvas
+			// buffer as directly to the display controller as it can. Only the layer
+			// being drawn on wants this; latency matters there, stability below.
 			this.lctx = this.live.getContext("2d",
 				this.plugin.settings.lowLatency ? { desynchronized: true } : {}) as CanvasRenderingContext2D;
 			this.lowLatency = !!this.lctx.getContextAttributes?.().desynchronized;
@@ -172,7 +176,7 @@ export class HandwritingView extends TextFileView {
 		this.stopGlide();
 	}
 
-	/* ================= 工具栏 ================= */
+	/* ============ Toolbar ============ */
 
 	private buildToolbar(bar: HTMLDivElement) {
 		bar.empty();
@@ -212,7 +216,8 @@ export class HandwritingView extends TextFileView {
 		btn("undo", "撤销", () => this.undo());
 		btn("code", "看 Markdown 源码", () => this.plugin.toMarkdown(this.leaf));
 
-		// 版本号直接印在工具栏上 —— 隔着 iCloud 调试时，一眼就能确认跑的是哪个版本
+		// The version is printed on the toolbar: when debugging across iCloud it is
+		// the fastest way to confirm which build is actually running
 		bar.createDiv({ text: "v" + this.plugin.manifest.version, attr: { style: S.version } });
 
 		const sync = () => {
@@ -225,10 +230,11 @@ export class HandwritingView extends TextFileView {
 		sync();
 	}
 
-	/* ================= 尺寸与坐标 ================= */
+	/* ============ Size and coordinates ============ */
 
-	/** 缩放 1 时一页宽铺满视口，左右各留 EDGE_PAD 的余量 ——
-	 *  不留的话纸张外框正好压在屏幕最边缘，等于看不见。 */
+	/** At zoom 1 the page fills the viewport width with EDGE_PAD to spare on each
+	 *  side; without it the page frame sits on the very edge of the screen and is
+	 *  effectively invisible. */
 	private get scale() {
 		const w = Math.max(this.surface.clientWidth - EDGE_PAD * 2, 80);
 		return (w / PAGE_W) * this.zoom;
@@ -254,7 +260,7 @@ export class HandwritingView extends TextFileView {
 		this.rebuildOverlay();
 	}
 
-	/** 把「内容坐标 -> 设备像素」的平移和缩放一次性装进 context */
+	/** Bake the content-to-device-pixel pan and zoom into the context in one go */
 	private applyTransform(cx: CanvasRenderingContext2D) {
 		const dpr = window.devicePixelRatio || 1;
 		const s = this.scale * dpr;
@@ -272,10 +278,11 @@ export class HandwritingView extends TextFileView {
 		};
 	}
 
-	/* ================= 分页：始终留一页空白 ================= */
+	/* ============ Paging: always keep one blank page ============ */
 
-	/** Notability 的做法：只要最后一页写上了东西，就再补一页。
-	 *  这里直接从内容推导，不用单独存页数 —— 删掉内容页数也会跟着收回。 */
+	/** Notability's approach: as soon as the last page has something on it, add
+	 *  another. Derived from the content rather than stored separately, so
+	 *  deleting content shrinks the page count again. */
 	private recountPages() {
 		let maxY = 0;
 		for (const st of this.doc.strokes) for (const p of st.pts) if (p.y > maxY) maxY = p.y;
@@ -290,7 +297,7 @@ export class HandwritingView extends TextFileView {
 	private clampPan() {
 		const maxY = Math.max(0, this.contentH() - this.viewH);
 		this.panY = Math.min(Math.max(this.panY, 0), maxY);
-		if (PAGE_W <= this.viewW) this.panX = -(this.viewW - PAGE_W) / 2;   // 页比视口窄就居中
+		if (PAGE_W <= this.viewW) this.panX = -(this.viewW - PAGE_W) / 2;   // centre the page when it is narrower than the viewport
 		else this.panX = Math.min(Math.max(this.panX, 0), PAGE_W - this.viewW);
 	}
 
@@ -318,7 +325,7 @@ export class HandwritingView extends TextFileView {
 		return { smooth: s.smooth, thin: s.thin, taper: s.taper, filter: s.filter };
 	}
 
-	/* ================= 画布渲染 ================= */
+	/* ============ Canvas rendering ============ */
 
 	private redrawAll() {
 		if (!this.surface) return;
@@ -328,7 +335,8 @@ export class HandwritingView extends TextFileView {
 		this.applyTransform(cx);
 		this.drawPages(cx);
 
-		// 只画视口里的笔迹。多页文档下这一步省掉绝大部分工作。
+		// Only draw ink inside the viewport; across many pages this skips almost
+		// all of the work
 		const top = this.panY - 40, bot = this.panY + this.viewH + 40;
 		for (const st of this.doc.strokes) {
 			const b = bboxOf(st);
@@ -340,8 +348,9 @@ export class HandwritingView extends TextFileView {
 		this.redrawLive();
 	}
 
-	/** 桌面底色 + 纸张 + 描边 + 分页线。
-	 *  缩到比屏幕还小的时候，如果纸张没有边界，深色模式下根本分不清哪块是画布。 */
+	/** Desk colour, the page, its frame and the page breaks. Zoomed out past the
+	 *  screen, an unframed page is impossible to tell from the background in dark
+	 *  mode. */
 	private drawPages(cx: CanvasRenderingContext2D) {
 		const st = getComputedStyle(this.contentEl);
 		const pick = (name: string, fb: string) => st.getPropertyValue(name).trim() || fb;
@@ -351,11 +360,12 @@ export class HandwritingView extends TextFileView {
 		const faint = pick("--text-faint", "rgba(127,127,127,.5)");
 		const H = this.contentH();
 
-		// 纸张外面是"桌面"，铺满整个视口
+		// Outside the page is the "desk", covering the whole viewport
 		cx.fillStyle = desk;
 		cx.fillRect(this.panX - 8, this.panY - 8, this.viewW + 16, this.viewH + 16);
 
-		// 纸张本身。只画视口附近那一段，长文档不必整张铺
+		// The page itself, only the part near the viewport; no need to fill a long
+		// document end to end
 		const y0 = Math.max(0, this.panY - 60), y1 = Math.min(H, this.panY + this.viewH + 60);
 		if (y1 > y0) {
 			cx.fillStyle = page;
@@ -363,7 +373,7 @@ export class HandwritingView extends TextFileView {
 		}
 
 		cx.save();
-		// 分页虚线
+		// Dashed page breaks
 		cx.strokeStyle = border;
 		cx.lineWidth = 1 / this.scale;
 		cx.setLineDash([8 / this.scale, 6 / this.scale]);
@@ -375,13 +385,14 @@ export class HandwritingView extends TextFileView {
 		}
 		cx.setLineDash([]);
 
-		// 纸张外框：整个文档一个矩形，超出视口的部分由 canvas 自己裁掉。
-		// 用 --text-faint 而不是 border 色 —— 后者在深色主题下太淡，看不出纸张边界。
+		// Page frame: one rectangle for the whole document, with canvas clipping
+		// whatever falls outside the viewport. Uses --text-faint rather than the
+		// border colour, which is too faint in dark themes to read as an edge.
 		cx.lineWidth = 2 / this.scale;
 		cx.strokeStyle = faint;
 		cx.strokeRect(0, 0, PAGE_W, H);
 
-		// 页码
+		// Page numbers
 		cx.fillStyle = faint;
 		cx.font = `${22 / this.scale}px sans-serif`;
 		cx.textAlign = "right";
@@ -402,7 +413,8 @@ export class HandwritingView extends TextFileView {
 		const sel = mode === "selected";
 		cx.setLineDash(mode === "drawing" ? [] : [sel ? 9 / this.scale : 7 / this.scale, 6 / this.scale]);
 		cx.lineWidth = (sel ? 3 : 2) / this.scale;
-		// 未选中是暗蓝细虚线，选中变亮蓝加粗 —— 一眼要能看出状态差别
+		// Unselected is a thin dim-blue dashed line, selected is thicker and bright:
+		// the state has to be obvious at a glance
 		cx.strokeStyle = mode === "idle" ? "rgba(78,96,180,.42)" : "rgba(70,135,255,1)";
 		pathToCanvas(cx, path);
 		if (mode !== "drawing") {
@@ -419,7 +431,8 @@ export class HandwritingView extends TextFileView {
 		this.lctx.clearRect(0, 0, this.live.width, this.live.height);
 		this.applyTransform(this.lctx);
 		if (this.cur) {
-			// 预测点只画不存 —— 下一批真实采样到达时它们就被丢弃重算
+			// Predicted points are drawn but never stored; the next batch of real
+			// samples discards and recomputes them
 			const ahead = this.drawing ? predictTip(this.cur.pts, this.plugin.settings.predict) : [];
 			const s = ahead.length ? { ...this.cur, pts: this.cur.pts.concat(ahead) } : this.cur;
 			drawStroke(this.lctx, s, this.opts(), false);
@@ -427,18 +440,22 @@ export class HandwritingView extends TextFileView {
 		if (this.lasso && this.lasso.length > 1) this.drawRegionOutline(this.lctx, this.lasso, "drawing");
 	}
 
-	/** 直接在事件里画，不等 requestAnimationFrame —— 那要多等最多一整帧。
-	 *  合并事件本来就是一帧一批，所以重绘次数不会变多，只是早了一帧。 */
+	/** Draw straight from the event instead of waiting for requestAnimationFrame,
+	 *  which would cost up to a whole frame. Coalesced events already arrive one
+	 *  batch per frame, so this does not add redraws, it just happens a frame
+	 *  earlier. */
 	private schedule() { this.redrawLive(); }
 
-	/* ================= 输入 ================= */
+	/* ============ Input ============ */
 
-	/* 职责划分：
-	 *   笔    —— 只写字。不选中、不拖动、不长按弹菜单。
-	 *            我们的套索是**持久存在的命名区域**，不是一次性选区，
-	 *            拿笔在圈里点几个点是常态操作，不能因此就把圈选中了。
-	 *   手指  —— 只操作。轻点选中/取消、拖已选中的圈、平移、双指缩放。永远不画。
-	 *   鼠标  —— 桌面端没有手指，所以两样都干。
+	/* Responsibilities are split by input device:
+	 *   pen     writing only; never selects, drags, or long-presses for a menu.
+	 *           Our lassos are persistent named regions, not one-shot selections,
+	 *           so dotting a few marks inside a ring is ordinary writing and must
+	 *           not select it.
+	 *   finger  manipulation only; tap to select or clear, drag a region, pan,
+	 *           pinch zoom. Never draws.
+	 *   mouse   there is no finger on desktop, so it does both.
 	 */
 	private bindPointer() {
 		const el = this.live;
@@ -447,7 +464,8 @@ export class HandwritingView extends TextFileView {
 			const finger = e.pointerType === "touch";
 
 			if (finger && !this.plugin.settings.allowFinger) {
-				// 笔已经落下时，手掌一律无视 —— 否则写字时手掌搭上去页面就滚了
+				// Ignore every touch while the pen is down, or resting a palm on the
+				// screen while writing would scroll the page
 				if (this.drawing) return;
 				this.stopGlide();
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -458,9 +476,9 @@ export class HandwritingView extends TextFileView {
 				this.tap = { x: e.clientX, y: e.clientY, finger: true };
 				this.armLongPress(p.x, p.y, true);
 
-				// 按在任何圈上 -> 准备拖它，否则准备平移。
-				// 不要求"先选中才能拖"—— 那是我自己加的前提，手指按上去就该能拖。
-				// 两者都要等移动超过死区才真正开始，这样轻点不会被误判成拖动。
+				// Pressing on any region prepares a drag, otherwise a pan. Selecting
+				// first is deliberately not required. Either way the gesture only
+				// starts past the dead zone, so a tap is never mistaken for a drag.
 				const hit = this.regionAt(p.x, p.y);
 				this.lastTouchInfo = hit
 					? `按在「${hit.name}」上，待拖动`
@@ -478,14 +496,15 @@ export class HandwritingView extends TextFileView {
 			}
 
 			e.preventDefault();
-			// 笔落下时接管一切：丢掉正在进行的手指平移
+			// The pen takes over everything: drop any pan in progress
 			if (!finger) { this.stopGlide(); this.touches.clear(); this.panFrom = null; this.pinch = null; }
 			el.setPointerCapture(e.pointerId);
 			const pt = this.toPage(e);
 
 			if (this.tool === "eraser") { this.drawing = true; this.eraseAt(pt.x, pt.y); return; }
 			if (this.tool === "lasso") {
-				// 套索工具下永远是画新圈 —— 否则外圈选中时就没法在它内部再圈一个
+				// The lasso tool always draws a new ring; otherwise a selected outer
+				// region would make it impossible to draw one inside it
 				this.drawing = true;
 				this.lastT = e.timeStamp;
 				this.lasso = [[pt.x, pt.y]];
@@ -493,7 +512,8 @@ export class HandwritingView extends TextFileView {
 				return;
 			}
 
-			// 鼠标兼任"手指"：可以轻点选中、可以拖已选中的圈。笔不行。
+			// The mouse doubles as a finger: it can tap to select and drag a selected
+			// region. The pen cannot.
 			if (e.pointerType !== "pen") {
 				this.tap = { x: e.clientX, y: e.clientY, finger: false };
 				const hit = this.regionAt(pt.x, pt.y);
@@ -513,7 +533,7 @@ export class HandwritingView extends TextFileView {
 				this.clearLongPress();
 			}
 
-			// 拖动区域（手指和鼠标共用这一段，所以放在触摸分支之前）
+			// Region dragging, shared by finger and mouse, hence before the touch branch
 			if (this.regionDrag) {
 				e.preventDefault();
 				const g = this.doc.regions.find((r) => r.id === this.regionDrag!.id);
@@ -533,19 +553,20 @@ export class HandwritingView extends TextFileView {
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				if (this.touches.size >= 2) { this.handlePinch(); return; }
 
-				// 手指按在已选中的圈上，移动超过死区就开始拖它
+				// Finger resting on a region: start dragging once it leaves the dead zone
 				if (this.fingerOn) {
 					if (Math.hypot(e.clientX - this.fingerOn.x, e.clientY - this.fingerOn.y) < 4) return;
 					const p = this.toPage(e);
 					const id = this.fingerOn.id;
 					this.fingerOn = null;
-					if (this.selRegion !== id) this.select(id);   // 拖谁就选中谁，给个反馈
+					if (this.selRegion !== id) this.select(id);   // selecting what you drag gives feedback
 					this.startRegionDrag(id, p.x, p.y);
 					this.lastTouchInfo += " -> 已开始拖动";
 					return;
 				}
 				if (this.panFrom) {
-					// 死区：没超过这点距离就不当平移，否则手指微抖会把画面挪走
+					// Dead zone: below this distance it is not a pan, otherwise a slight
+					// wobble would drag the view
 					if (!this.panMoved) {
 						if (Math.hypot(e.clientX - this.panFrom.x, e.clientY - this.panFrom.y) < 4) return;
 						this.panMoved = true;
@@ -565,7 +586,8 @@ export class HandwritingView extends TextFileView {
 			e.preventDefault();
 			if (this.tool === "eraser") { const p = this.toPage(e); this.eraseAt(p.x, p.y); return; }
 
-			// iPadOS 上相邻两次 pointermove 的合并窗口会重叠，按时间戳严格递增去重
+			// On iPadOS the coalesced windows of consecutive pointermove events
+			// overlap, so deduplicate by strictly increasing timestamp
 			const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
 			const fresh: PointerEvent[] = [];
 			for (const ev of evs) {
@@ -597,7 +619,7 @@ export class HandwritingView extends TextFileView {
 				this.panFrom = this.touches.size === 1 ? { ...[...this.touches.values()][0] } : null;
 			}
 
-			// 区域拖动收尾
+			// Finish a region drag
 			if (this.regionDrag) {
 				const d = this.regionDrag;
 				this.regionDrag = null;
@@ -612,7 +634,7 @@ export class HandwritingView extends TextFileView {
 				return;
 			}
 
-			// 轻点：选中 / 取消选中。笔永远走不到这里，它从不设置 this.tap
+			// Tap: select or clear. The pen never reaches this, it never sets this.tap
 			if (wasTap) {
 				const p = this.toPage(e);
 				this.handleTap(p.x, p.y);
@@ -643,7 +665,7 @@ export class HandwritingView extends TextFileView {
 		this.registerDomEvent(el, "touchstart", (ev: TouchEvent) => ev.preventDefault());
 		this.registerDomEvent(el, "contextmenu", (ev: Event) => ev.preventDefault());
 
-		// 桌面端：滚轮滚动，Ctrl/⌘ + 滚轮以指针为中心缩放
+		// Desktop: the wheel scrolls, Ctrl/Cmd plus wheel zooms about the pointer
 		this.registerDomEvent(el, "wheel", (e: WheelEvent) => {
 			e.preventDefault();
 			this.stopGlide();
@@ -658,14 +680,17 @@ export class HandwritingView extends TextFileView {
 		});
 	}
 
-	/** 命中判定，两条规则，顺序不能反：
+	/** Hit test, two rules whose order matters:
 	 *
-	 *  1. 「在里面」优先于「在旁边」—— 只要点落在某个圈内部，就在这些圈里挑，
-	 *     绝不会被旁边一个轮廓碰巧更近的圈抢走。
-	 *  2. 内部有多个（嵌套）时选**面积最小**的，也就是最内层。外圈仍然选得到：
-	 *     点它轮廓上，或者点内层没盖住的地方。
+	 *  1. "Inside" beats "next to": if the point falls inside any region, the
+	 *     choice is made among those, and a region whose outline merely happens
+	 *     to be closer cannot steal it.
+	 *  2. Among containing regions the smallest area wins, i.e. the innermost.
+	 *     An outer region is still reachable: tap its outline, or a part of it
+	 *     the inner one does not cover.
 	 *
-	 *  都没进到，才退而求其次找容差内轮廓最近的。同一位置反复点结果不变。 */
+	 *  Only if nothing contains the point do we fall back to the nearest outline
+	 *  within tolerance. Repeated taps at the same spot give the same answer. */
 	private regionAt(x: number, y: number, tol = 16): Region | null {
 		let inner: Region | null = null, innerArea = Infinity;
 		let near: Region | null = null, nearD = Infinity;
@@ -698,7 +723,8 @@ export class HandwritingView extends TextFileView {
 		this.rebuildOverlay();
 	}
 
-	/** 轻点：点在圈上（或标签上）就选中它，点空白就取消。圈和标签是同一个东西。 */
+	/** Tap: selects the region under it (ring or tag alike), clears on empty space.
+	 *  The ring and its tag are one thing. */
 	private handleTap(x: number, y: number) {
 		const hit = this.regionAt(x, y);
 		this.select(hit ? hit.id : null);
@@ -709,10 +735,10 @@ export class HandwritingView extends TextFileView {
 		if (!allow) return;
 		this.lpTimer = window.setTimeout(() => {
 			this.lpTimer = 0;
-			if (!this.tap) return;              // 已经移动了，不算长按
+			if (!this.tap) return;              // already moved, not a long press
 			const hit = this.regionAt(x, y);
 			if (!hit) return;
-			this.tap = null;                    // 长按已经处理，抬手时不要再当轻点
+			this.tap = null;                    // handled as a long press, so not a tap on release
 			this.drawing = false;
 			this.cur = null;
 			this.redrawLive();
@@ -724,7 +750,7 @@ export class HandwritingView extends TextFileView {
 		if (this.lpTimer) { window.clearTimeout(this.lpTimer); this.lpTimer = 0; }
 	}
 
-	/** 开始拖动某个区域（手指和鼠标共用） */
+	/** Start dragging a region, shared by finger and mouse */
 	private startRegionDrag(id: string, x: number, y: number) {
 		const g = this.doc.regions.find((r) => r.id === id);
 		if (!g) return;
@@ -736,8 +762,9 @@ export class HandwritingView extends TextFileView {
 		this.regionDrag = { id, ox: x, oy: y, dx: 0, dy: 0, moved: false };
 	}
 
-	/** 拖动区域时圈里的笔迹跟着一起走 —— 否则圈移开之后框住的就是别的内容，
-	 *  [[笔记#区域名]] 引用到的东西会莫名其妙变掉。 */
+	/** Moving a region carries the ink inside it. Otherwise the ring would end up
+	 *  around different content and [[note#region]] would silently resolve to
+	 *  something else. */
 	private moveRegion(g: Region, dx: number, dy: number) {
 		for (const pt of g.path) { pt[0] += dx; pt[1] += dy; }
 		for (const i of this.strokesInRegionBefore) {
@@ -750,19 +777,20 @@ export class HandwritingView extends TextFileView {
 		if (this.glideRaf) { cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
 	}
 
-	/** 惯性滚动：抬手后按指数衰减继续滑，撞到边界就停。
-	 *  没有这个，手一停画面就死住，手感很硬 —— 浏览器和所有原生列表都有这个减速过程。 */
+	/** Inertial scrolling: after the finger lifts, keep gliding with exponential
+	 *  decay and stop at the edges. Without it the view freezes the instant the
+	 *  finger stops, which feels harsh -- browsers and every native list decelerate. */
 	private startGlide() {
 		const s = this.velSamples;
 		if (s.length < 2) return;
 		const last = s[s.length - 1];
 		let first = s[0];
 		for (let i = s.length - 1; i >= 0; i--) {
-			if (last.t - s[i].t <= 90) first = s[i]; else break;   // 只用最后 90ms，避免被早期慢速拖累
+			if (last.t - s[i].t <= 90) first = s[i]; else break;   // last 90ms only, so a slow approach does not dilute the flick
 		}
 		const dt = last.t - first.t;
 		if (dt < 8) return;
-		// 屏幕像素/ms -> 内容单位/ms（平移方向与手指相反）
+		// screen px/ms -> content units/ms; the pan runs opposite to the finger
 		let vx = -(last.x - first.x) / dt / this.scale;
 		let vy = -(last.y - first.y) / dt / this.scale;
 		if (Math.hypot(vx, vy) < 0.03) return;
@@ -770,14 +798,14 @@ export class HandwritingView extends TextFileView {
 		let prev = performance.now();
 		const step = () => {
 			const now = performance.now();
-			const d = Math.min(now - prev, 48);   // 掉帧时不要一下窜出去
+			const d = Math.min(now - prev, 48);   // on a dropped frame, do not lurch forward
 			prev = now;
 			const wantX = this.panX + vx * d, wantY = this.panY + vy * d;
 			this.panX = wantX; this.panY = wantY;
-			this.syncViewport();                  // 内部会 clamp
-			if (Math.abs(this.panY - wantY) > 1e-6) vy = 0;   // 撞到上下边界
+			this.syncViewport();                  // clamps internally
+			if (Math.abs(this.panY - wantY) > 1e-6) vy = 0;   // hit the top or bottom edge
 			if (Math.abs(this.panX - wantX) > 1e-6) vx = 0;
-			const decay = Math.pow(0.9975, d);    // 约 1 秒滑停，跟 iOS 手感接近
+			const decay = Math.pow(0.9975, d);    // glides to a stop in about a second, close to iOS
 			vx *= decay; vy *= decay;
 			if (Math.hypot(vx, vy) < 0.015) { this.glideRaf = 0; return; }
 			this.glideRaf = requestAnimationFrame(step);
@@ -785,7 +813,7 @@ export class HandwritingView extends TextFileView {
 		this.glideRaf = requestAnimationFrame(step);
 	}
 
-	/** 双指缩放：让捏合中点下的那个内容点保持不动 */
+	/** Pinch zoom: keep the content point under the pinch midpoint fixed */
 	private handlePinch() {
 		const [a, b] = [...this.touches.values()];
 		const d = Math.hypot(a.x - b.x, a.y - b.y);
@@ -799,7 +827,7 @@ export class HandwritingView extends TextFileView {
 		this.setZoom(z, this.pinch.cx, this.pinch.cy, mx, my);
 	}
 
-	/** 缩放到 z，并让内容点 (cx,cy) 停在屏幕坐标 (sx,sy) 处 */
+	/** Zoom to z, leaving content point (cx,cy) at screen coordinate (sx,sy) */
 	private setZoom(z: number, cx: number, cy: number, sx: number, sy: number) {
 		this.zoom = Math.min(Math.max(z, 0.4), 6);
 		const r = this.live.getBoundingClientRect();
@@ -813,7 +841,7 @@ export class HandwritingView extends TextFileView {
 		this.syncViewport();
 	}
 
-	/** 写到最后一页就再补一页，永远留一页空白 */
+	/** Writing on the last page adds another, so one blank page always remains */
 	private growPages() {
 		const before = this.pages;
 		this.recountPages();
@@ -835,14 +863,15 @@ export class HandwritingView extends TextFileView {
 		this.requestSave();
 	}
 
-	/* ================= 套索 -> 命名区域 ================= */
+	/* ============ Lasso to named region ============ */
 
 	private finishLasso() {
 		const path = this.lasso ?? [];
 		this.lasso = null;
 		this.redrawLive();
 		const box = polyBounds(path);
-		// 太小的圈当成误触；封闭由多边形本身保证（首尾自动相连）
+		// A tiny ring counts as a stray touch; closure is implicit in the polygon,
+		// whose first and last points connect automatically
 		if (path.length < 8 || box.w < 12 || box.h < 12) { this.redrawLive(); return; }
 
 		const taken = this.doc.regions.map((r) => r.name);
@@ -864,7 +893,7 @@ export class HandwritingView extends TextFileView {
 
 	private linkBase() { return this.file?.basename ?? ""; }
 
-	/* ================= 画布上的元素层 ================= */
+	/* ============ Overlay items on the canvas ============ */
 
 	private addLink() {
 		const item: LinkItem = {
@@ -904,7 +933,8 @@ export class HandwritingView extends TextFileView {
 		const s = this.scale;
 		this.overlay.style.transform =
 			`translate(${(-this.panX * s).toFixed(2)}px, ${(-this.panY * s).toFixed(2)}px) scale(${s})`;
-		// 浮动 UI 抵消掉整体缩放，否则放大画布时按钮会跟着变成巨无霸
+		// Floating UI cancels out the overall zoom, or buttons would turn into
+		// giants when the canvas is zoomed in
 		const k = (1 / s).toFixed(4);
 		for (const el of this.counterScaled) el.style.transform = `scale(${k})`;
 	}
@@ -931,7 +961,7 @@ export class HandwritingView extends TextFileView {
 			text: g.name || "(未命名)",
 			attr: { style: sel ? S.regionNameOn : S.regionName },
 		});
-		// 标签和圈是同一个东西：点一下选中，长按弹选项
+		// The tag and the ring are one thing: tap selects, long press opens options
 		let lp = 0, tapAt: { x: number; y: number } | null = null;
 		name.addEventListener("pointerdown", (e: PointerEvent) => {
 			e.stopPropagation();
@@ -1017,7 +1047,7 @@ export class HandwritingView extends TextFileView {
 		);
 	}
 
-	/** 拖动移动；轻点打开编辑 */
+	/** Drag to move, tap to edit */
 	private wireItem(root: HTMLElement, handle: HTMLElement, it: LinkItem) {
 		let sx = 0, sy = 0, ox = 0, oy = 0, moved = false;
 		handle.addEventListener("pointerdown", (e: PointerEvent) => {
@@ -1042,7 +1072,7 @@ export class HandwritingView extends TextFileView {
 		});
 	}
 
-	/* ================= 撤销 ================= */
+	/* ============ Undo ============ */
 
 	undo() {
 		const e = this.undoStack.pop();
@@ -1073,7 +1103,7 @@ export class HandwritingView extends TextFileView {
 		this.requestSave();
 	}
 
-	/* ================= 诊断 / 刷新 ================= */
+	/* ============ Diagnostics and refresh ============ */
 
 	diagnostics(): Record<string, string> {
 		const cs = (el: Element | null, prop: string) => (el ? getComputedStyle(el).getPropertyValue(prop) : "—");
@@ -1105,7 +1135,8 @@ export class HandwritingView extends TextFileView {
 	refresh() { this.resize(); }
 }
 
-/** 笔迹包围盒。多页文档下用来剔除视口外的笔迹，缓存在笔迹对象上。 */
+/** Stroke bounding box, cached on the stroke, used to cull ink outside the
+ *  viewport in a multi-page document. */
 const bboxCache = new WeakMap<Stroke, { y0: number; y1: number }>();
 function bboxOf(st: Stroke) {
 	let b = bboxCache.get(st);

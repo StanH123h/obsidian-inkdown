@@ -4,12 +4,12 @@ import { emptyDoc, isHandwritingData, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
 
 export interface HandwritingSettings {
-	smooth: number;      // 输入流线化 0..0.9
-	thin: number;        // 压感对粗细的影响 0..1
-	taper: number;       // 0 = 关，1 = 轻微
-	filter: number;      // 0 = 指数平滑，1 = 1€ 滤波
-	predict: number;     // 笔尖预测超前帧数，0 = 关
-	lowLatency: boolean; // 画布 desynchronized 提示
+	smooth: number;      // input streamlining, 0..0.9
+	thin: number;        // how much pressure affects width, 0..1
+	taper: number;       // 0 = off, 1 = subtle
+	filter: number;      // 0 = exponential smoothing, 1 = one-euro filter
+	predict: number;     // frames of tip prediction, 0 = off
+	lowLatency: boolean; // desynchronized canvas hint
 	allowFinger: boolean;
 }
 
@@ -26,7 +26,7 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 export default class HandwritingPlugin extends Plugin {
 	settings: HandwritingSettings = DEFAULT_SETTINGS;
 
-	/** 用户主动要看源码的文件，暂时别抢回手写视图 */
+	/** Files the user explicitly asked to see as source; do not grab them back */
 	private bypass = new Set<string>();
 
 	async onload() {
@@ -34,7 +34,7 @@ export default class HandwritingPlugin extends Plugin {
 
 		this.registerView(VIEW_TYPE, (leaf) => new HandwritingView(leaf, this));
 
-		// 让普通 markdown 笔记里的 ![[某手写笔记#区域]] 真的显示出那块手写内容
+		// Make ![[note#region]] inside ordinary markdown notes actually show that ink
 		this.registerMarkdownPostProcessor(
 			embedProcessor(this.app, () => ({
 				smooth: this.settings.smooth,
@@ -44,11 +44,13 @@ export default class HandwritingPlugin extends Plugin {
 			})),
 		);
 
-		// 手写笔记本身是普通 markdown，所以 Obsidian 会用 MarkdownView 打开它。
-		// 这里在布局变化后把它换成手写视图。
-		// 这是整套方案里唯一一处依赖非公开行为的地方（Excalidraw 也是这么做的）。
+		// A handwriting note is ordinary markdown, so Obsidian opens it in a
+		// MarkdownView. Swap that for the handwriting view once the layout settles.
+		// This is the one place in the whole design that leans on undocumented
+		// behaviour (Excalidraw does the same).
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.claimLeaves()));
-		// 识别靠 frontmatter，所以缓存就绪后要再扫一遍 —— 启动时可能先于缓存打开文件
+		// Detection reads frontmatter, so re-scan once the cache resolves: on startup
+		// a file can be opened before the cache is populated
 		this.registerEvent(this.app.metadataCache.on("resolved", () => this.claimLeaves()));
 		this.registerEvent(this.app.metadataCache.on("changed", () => this.claimLeaves()));
 		this.registerEvent(this.app.workspace.on("file-open", () => this.claimLeaves()));
@@ -85,10 +87,10 @@ export default class HandwritingPlugin extends Plugin {
 				if (!old.length) { new Notice("没有 .hw.md 文件需要迁移"); return; }
 				let done = 0;
 				for (const f of old) {
-					// 用 fileManager.renameFile，它会自动把指向这个文件的链接一起改掉
+					// fileManager.renameFile also updates every link pointing at the file
 					const to = f.path.replace(/\.hw\.md$/, ".md");
-					if (this.app.vault.getAbstractFileByPath(to)) continue;   // 重名就跳过
-					try { await this.app.fileManager.renameFile(f, to); done++; } catch (e) { /* 跳过 */ }
+					if (this.app.vault.getAbstractFileByPath(to)) continue;   // skip name collisions
+					try { await this.app.fileManager.renameFile(f, to); done++; } catch (e) { /* skip */ }
 				}
 				new Notice(`已迁移 ${done} / ${old.length} 个文件`);
 			},
@@ -108,7 +110,7 @@ export default class HandwritingPlugin extends Plugin {
 		this.bypass.clear();
 	}
 
-	/** 移动端没有 devtools，只能让插件自己把状态报出来 */
+	/** No devtools on mobile, so the plugin has to report its own state */
 	collectDiagnostics(): Record<string, string> {
 		const out: Record<string, string> = {
 			"插件版本": this.manifest.version,
@@ -124,16 +126,17 @@ export default class HandwritingPlugin extends Plugin {
 	}
 
 
-	/* ================= 视图接管 ================= */
+	/* ============ View takeover ============ */
 
 	private currentFile(leaf: WorkspaceLeaf | null): TFile | null {
 		const v = leaf?.view as { file?: TFile } | undefined;
 		return v?.file ?? null;
 	}
 
-	/** MarkdownView 手上就有文件内容，所以除了查元数据缓存，再直接看一眼内容。
-	 *  缓存是异步更新的 —— 重命名、外部同步、刚创建的文件都可能还没进缓存，
-	 *  只靠缓存判断会漏掉这些情况。 */
+	/** A MarkdownView already holds the file contents, so besides querying the
+	 *  metadata cache we can just look at the text. The cache updates
+	 *  asynchronously: renamed files, externally synced files and freshly created
+	 *  ones may not be in it yet, and a cache-only check misses all of those. */
 	isHandwritingLeaf(leaf: WorkspaceLeaf): TFile | null {
 		const view = leaf.view as MarkdownView;
 		const file = view?.file;
@@ -154,7 +157,7 @@ export default class HandwritingPlugin extends Plugin {
 		leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path } });
 	}
 
-	/** 工具栏上的「看源码」：换回 MarkdownView，并且这次别再抢回来 */
+	/** The toolbar's "view source": go back to a MarkdownView and stay there */
 	toMarkdown(leaf: WorkspaceLeaf) {
 		const file = this.currentFile(leaf);
 		if (!file) return;
@@ -162,7 +165,7 @@ export default class HandwritingPlugin extends Plugin {
 		leaf.setViewState({ type: "markdown", state: { file: file.path, mode: "source" } });
 	}
 
-	/* ================= 新建 ================= */
+	/* ============ Creating notes ============ */
 
 	private async createNote() {
 		const active = this.app.workspace.getActiveFile();
@@ -182,7 +185,7 @@ export default class HandwritingPlugin extends Plugin {
 		}
 	}
 
-	/* ================= 设置 ================= */
+	/* ============ Settings ============ */
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());

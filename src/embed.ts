@@ -1,5 +1,6 @@
-/* 解析 [[目标]] / ![[目标#区域]]，并把内容渲染出来。
- * 两处共用：手写画布上的嵌入元素，以及普通 markdown 笔记里的 ![[某手写笔记#区域]]。 */
+/* Resolve [[target]] / ![[target#region]] and render what it points at.
+ * Shared by two callers: embed items on the handwriting canvas, and
+ * ![[note#region]] inside ordinary markdown notes. */
 
 import { App, MarkdownRenderChild, parseLinktext, resolveSubpath, TFile } from "obsidian";
 import { Box, InkOpts, Region, Stroke, paintInk, polyBounds, strokeInRegion } from "./ink";
@@ -15,16 +16,20 @@ export async function resolveTarget(app: App, target: string, sourcePath: string
 	const file = app.metadataCache.getFirstLinkpathDest(path, sourcePath);
 	if (!file) return { kind: "missing", label: target };
 
-	// 先读内容再判断，不依赖元数据缓存是否就绪 —— 嵌入随时可能在缓存之前渲染
+	// Read the contents before deciding, rather than trusting the metadata cache:
+	// an embed can render before the cache has caught up
 	const raw = await app.vault.cachedRead(file);
 	if (isHandwritingData(raw)) {
 		const doc = parse(raw);
 		if (subpath) {
-			// 只挑笔迹，不看别的圈、也不看画布上的 wiki link 元素。
-			// 设计原则：原生内容渲染，引用不渲染，一层就是一层（见 README）。
-			// 所以区域引用不会形成链、不会循环，也不会因为改了远处某篇笔记而变。
+			// Ink only: other regions and the canvas's own wiki-link items are
+			// ignored. Design principle: own content renders, references do not,
+			// one level deep (see README). A region reference therefore cannot
+			// form a chain or a cycle, and cannot change because some distant
+			// note was edited.
 			const name = subpath.replace(/^#+/, "").trim();
-			// 同名区域取第一个 —— 跟 Obsidian 解析同名标题的行为一致
+			// Duplicate names resolve to the first match, matching how Obsidian
+			// resolves duplicate headings
 			const region: Region | undefined = doc.regions.find((r) => r.name === name);
 			if (!region || region.path.length < 3) return { kind: "missing", label: target };
 			return {
@@ -38,7 +43,7 @@ export async function resolveTarget(app: App, target: string, sourcePath: string
 		return { kind: "ink", file, strokes: doc.strokes, box: strokesBox(doc.strokes) };
 	}
 
-	// 普通 markdown：有子路径就切出对应的标题/区块
+	// Ordinary markdown: with a subpath, slice out the matching heading or block
 	let text = raw;
 	if (subpath) {
 		const cache = app.metadataCache.getFileCache(file);
@@ -58,11 +63,12 @@ function strokesBox(strokes: Stroke[]): Box {
 	return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
-/** 把解析结果画进画布上的嵌入框。
+/** Paint a resolved target into an embed box on the canvas.
  *
- *  只接受手写内容 —— 画布上的 wiki link 只能引用另一篇手写笔记或者某个圈，
- *  不能引用普通 markdown 文档。这样手写画布始终只显示"画出来的东西"，
- *  不会变成一个嵌套渲染文档的容器（见 README 的「设计原则：不嵌套」）。 */
+ *  Handwriting only. A wiki link on the canvas may point at another handwriting
+ *  note or one of its regions, never at an ordinary markdown document, so the
+ *  canvas always shows things that were drawn and never becomes a container
+ *  that nests rendered documents (see "no nesting" in the README). */
 export function renderResolved(
 	container: HTMLElement, r: Resolved, cssWidth: number, opt: InkOpts,
 ): void {
@@ -77,7 +83,7 @@ export function renderResolved(
 	paintInk(cv, r.strokes, opt, r.box, cssWidth, r.clip);
 }
 
-/* ================= 普通笔记里的 ![[某手写笔记]] ================= */
+/* ============ ![[handwriting note]] inside ordinary notes ============ */
 
 class InkEmbed extends MarkdownRenderChild {
 	constructor(
@@ -99,7 +105,7 @@ class InkEmbed extends MarkdownRenderChild {
 	}
 }
 
-/** 让普通 markdown 笔记里的 ![[某手写笔记#区域]] 真的显示出那块手写内容 */
+/** Makes ![[note#region]] in an ordinary markdown note actually show that ink */
 export function embedProcessor(app: App, getOpt: () => InkOpts) {
 	return (el: HTMLElement, ctx: { sourcePath: string; addChild(c: MarkdownRenderChild): void }) => {
 		el.querySelectorAll<HTMLElement>(".internal-embed").forEach((node) => {

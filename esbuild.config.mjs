@@ -3,8 +3,8 @@ import builtins from "builtin-modules";
 import fs from "fs";
 import path from "path";
 
-// .dev-targets 里每行一个插件目录，构建后把产物拷过去。
-// iCloud 不同步 symlink，所以 iPad 那份必须是真实拷贝。
+// One plugin directory per line in .dev-targets; build output is copied there.
+// iCloud does not sync symlinks, so the iPad copy has to be a real one.
 const targets = fs.existsSync(".dev-targets")
   ? fs.readFileSync(".dev-targets", "utf8").split("\n").map(s => s.trim()).filter(Boolean)
   : [];
@@ -15,10 +15,10 @@ const deploy = {
     build.onEnd((result) => {
       if (result.errors.length) return;
       for (const dir of targets) {
-        if (!fs.existsSync(dir)) { console.warn("  跳过（目录不存在）:", dir); continue; }
+        if (!fs.existsSync(dir)) { console.warn("  skipped (no such directory):", dir); continue; }
         for (const f of ["main.js", "manifest.json", "styles.css"])
           if (fs.existsSync(f)) fs.copyFileSync(f, path.join(dir, f));
-        console.log("  已部署 ->", dir);
+        console.log("  deployed ->", dir);
       }
     });
   },
@@ -26,7 +26,8 @@ const deploy = {
 
 const production = process.argv[2] === "production";
 
-// Obsidian 在运行时提供 "obsidian" 和 electron 这些模块，所以打包时要把它们排除掉。
+// Obsidian provides "obsidian" and the electron modules at runtime, so keep them
+// out of the bundle.
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,

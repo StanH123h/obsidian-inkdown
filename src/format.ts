@@ -1,25 +1,29 @@
-/* 手写笔记文件的读写。
+/* Reading and writing handwriting note files.
  *
- * 文件本体是一个完全正常的 markdown，Obsidian 照常索引它 —— wiki link、反链、
- * 图谱、搜索、重命名重构全部照常工作。笔迹和画布元素藏在 %%ink ... %% 里
- * （%% 是 Obsidian 的注释语法，不会显示）。
+ * The file is an ordinary markdown document, indexed by Obsidian as usual, so
+ * wiki links, backlinks, the graph, search and rename refactoring all keep
+ * working. Ink and canvas items hide inside %%ink ... %% (%% is Obsidian's
+ * comment syntax and never renders).
  *
- * 正文里那两段是**生成**的，作用是把画布上的东西"翻译"成 Obsidian 看得懂的形式：
- *   ## 区域  下面每个 ### 标题对应画布上一个套索区域，
- *            于是别处写 [[本文件#区域名]] 能解析、能自动补全、能进反链。
- *   ## 链接  把画布上的 wiki link 镜像成真链接，于是反链和图谱认得它们。
+ * Two sections in the body are *generated*; they translate what is on the
+ * canvas into a form Obsidian understands:
+ *   ## regions  each ### heading under it is one lasso region, so
+ *               [[this file#region name]] resolves, autocompletes and shows up
+ *               in backlinks
+ *   ## links    mirrors the canvas wiki links as real links, so backlinks and
+ *               the graph pick them up.
  *
  *   ---
  *   handwriting: v1
  *   ---
- *   # 标题
+ *   # Title
  *
- *   ## 区域
- *   ### 反应机理图
+ *   ## regions
+ *   ### reaction mechanism
  *
- *   ## 链接
- *   - [[SN2 反应]]
- *   - ![[能量图]]
+ *   ## links
+ *   - [[SN2 reaction]]
+ *   - ![[energy diagram]]
  *
  *   %%ink
  *   {"v":1,"w":1000,"strokes":[...],"items":[...],"regions":[...]}
@@ -29,14 +33,14 @@
 import { App, TFile } from "obsidian";
 import { PAGE_W, Region, Stroke, cleanRaw } from "./ink";
 
-/** 画布上的一个 wiki link 元素 */
+/** One wiki-link item on the canvas */
 export interface LinkItem {
 	id: string;
-	x: number;          // 页面单位
+	x: number;          // page units
 	y: number;
-	w: number;          // 嵌入时的显示宽度
-	target: string;     // [[ ]] 里面的内容，可带 #区域
-	embed: boolean;     // true = ![[ ]]，直接显示内容
+	w: number;          // display width when embedding
+	target: string;     // what goes inside [[ ]], may carry #region
+	embed: boolean;     // true = ![[ ]], render the content inline
 }
 
 export interface HwDoc {
@@ -48,18 +52,20 @@ export interface HwDoc {
 
 const INK_RE = /%%ink\n([\s\S]*?)\n%%/;
 
-/* 手写笔记就是普通的 .md 文件，靠 frontmatter 里的 handwriting 标记识别。
+/* A handwriting note is an ordinary .md file, identified by the handwriting key
+ * in its frontmatter.
  *
- * 早期用的是 .hw.md 这种复合后缀，但 Obsidian 眼里那种文件的 basename 是
- * 「BBB.hw」（扩展名只认最后一个 .md），于是 [[BBB]] 解析不到，而且文件列表、
- * 搜索、图谱里到处显示 BBB.hw。改成普通 .md 之后链接行为完全恢复正常。
- * 旧文件继续按路径识别，不用迁移也能打开。 */
+ * Early versions used a compound .hw.md suffix, but Obsidian reads such a
+ * file's basename as "BBB.hw" (only the final .md counts as the extension), so
+ * [[BBB]] does not resolve and "BBB.hw" shows up throughout the file list,
+ * search and graph. Plain .md restores native link behaviour. Older files are
+ * still recognised by path, so nothing has to be migrated. */
 
 export function isLegacyHandwritingPath(path: string): boolean {
 	return path.endsWith(".hw.md");
 }
 
-// 声明成类型守卫，调用处就不用再单独判空了
+// Declared as a type guard so callers do not need a separate null check
 export function isHandwritingFile(app: App, file: TFile | null): file is TFile {
 	if (!file || file.extension !== "md") return false;
 	if (isLegacyHandwritingPath(file.path)) return true;
@@ -67,14 +73,15 @@ export function isHandwritingFile(app: App, file: TFile | null): file is TFile {
 	return !!fm && fm.handwriting != null;
 }
 
-/** 直接看内容判断。用于元数据缓存还没就绪、或者拿不到 TFile 的场合。 */
+/** Decide straight from the contents, for when the metadata cache is not ready
+ *  yet or no TFile is available. */
 export function isHandwritingData(data: string): boolean {
 	return /^---[\s\S]*?^handwriting:/m.test(data.slice(0, 800)) || data.includes("%%ink\n");
 }
 
 export const newId = () => Math.random().toString(36).slice(2, 8);
 
-/** 区域名要当 markdown 标题用，这几个字符会破坏链接语法 */
+/** Region names become markdown headings; these characters would break link syntax */
 export function sanitizeName(name: string): string {
 	return name.replace(/[#\[\]|^\n\r]/g, "").trim();
 }
@@ -106,8 +113,8 @@ export function parse(data: string): HwDoc {
 			path: r.path ?? [],
 		}));
 	} catch (e) {
-		// 数据块坏了也不要连累其它内容
-		console.error("[handwriting] 笔迹数据解析失败", e);
+		// A corrupt data block must not take the rest of the note down with it
+		console.error("[handwriting] failed to parse ink data", e);
 	}
 	return doc;
 }
@@ -147,9 +154,10 @@ export function serialize(doc: HwDoc): string {
 	return out.join("\n");
 }
 
-/** 采样点抽稀：合并事件会给出非常密的点，间距小于 0.6 个页面单位的丢掉。
- * 肉眼看不出差别，文件能小一大截。
- * 存盘前先过一遍 cleanRaw()，顺便把 0.0.5 之前写坏的重复点永久清掉。 */
+/** Thin out samples: coalesced events produce very dense points, so drop any
+ * closer than 0.6 page units to the previous one. No visible difference, much
+ * smaller files. cleanRaw() runs first, which also permanently removes the
+ * duplicate points that versions before 0.0.5 wrote. */
 function decimate(pts: { x: number; y: number; p: number }[]) {
 	if (pts.length < 3) return pts;
 	const out = [pts[0]];

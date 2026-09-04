@@ -1,57 +1,75 @@
-# 笔迹渲染：踩过的坑和对应的测试
+# Stroke rendering: the landmines and the tests that cover them
 
-渲染一条变宽度的笔迹，看起来简单，实际有几个很容易踩、而且**只在真实噪声下才暴露**
-的陷阱。这里记下成因和验证方法，避免以后重复踩。
+Rendering a variable-width stroke looks simple. In practice there are several
+traps that **only show up under realistic input noise**. This records what
+causes them and how to verify a fix, so the same ground is not walked twice.
 
-## 采样层
+## Sampling
 
-**iPadOS 的 `getCoalescedEvents()` 窗口会重叠** —— 上一次 pointermove 已经给过的
-采样，这一次又原样给一遍。点序列于是"往回跳"，轮廓自交、填充绕数抵消，笔画上就是
-一道道龟裂。（这个 API 是 iOS 18.2 才加进 Safari 的，实现不完整，连 `pointerId`
-和 `target` 都缺。）
+**iPadOS returns overlapping `getCoalescedEvents()` windows** — samples already
+delivered by the previous `pointermove` are delivered again verbatim. The point
+sequence then jumps backwards, the outline crosses itself, nonzero winding
+cancels, and the stroke shows a row of cracks. (The API only landed in Safari
+with iOS 18.2 and is incomplete; the coalesced events even lack `pointerId` and
+`target`.)
 
-两道防线：输入端按事件时间戳严格递增去重；渲染端 `cleanRaw()` 查重（新点落在最近
-16 个已接受点的 0.35 单位邻域内即判定为重发）。判据用"位置重复"而不是"方向反转"，
-因为真实笔画本来就有急转和回锋。
+Two defences: on input, deduplicate by strictly increasing event timestamp; on
+render, `cleanRaw()` checks for duplication (a new point landing within 0.35
+units of one of the last 16 accepted points is a re-send). The test is
+duplication rather than direction reversal, because real strokes do turn
+sharply and do retrace.
 
-**落笔/抬笔瞬间的压力是假的** —— 数字化仪还没读出来，iPad 会报 0。用第一个/最后
-一个可信采样回填，而不是靠伪造笔锋去遮。
+**Pressure at touch-down and lift-off is fake** — the digitiser has not read it
+yet and iPad reports 0. Backfill from the first and last trustworthy sample
+rather than hiding it behind a fabricated taper.
 
-## 几何层
+## Geometry
 
-三条硬约束，每条都对应一个具体的视觉症状：
+Three hard invariants, each with a specific visual symptom when violated:
 
-| 约束 | 违反时的症状 | 做法 |
+| Invariant | Symptom | How it is held |
 |---|---|---|
-| 所有子路径同向 | 笔画中间出现**洞** | 梯形和圆盘的有向面积都为正 |
-| 子路径不能自交 | 洞 + **毛刺** | 梯形用"该段自己的法线"，凸多边形 |
-| 覆盖 = 真实笔迹区域 | 边缘**楔形缺口**（放大才看得见） | 每个采样点都补圆盘 |
+| All subpaths wound the same way | **holes** in the stroke | trapezoids and discs all have positive signed area |
+| Subpaths never self-intersect | holes and **spurs** | a trapezoid uses its own segment's normal, so it is convex |
+| Coverage equals the true stroke region | **wedge notches** on the edge, only visible zoomed in | a disc at every sample point |
 
-第二条特别隐蔽：用两个端点各自的法线构造四边形，一旦两端法线方向差超过 90°，
-四边形就被拧成蝴蝶结，两瓣绕向相反，其中一瓣绕数 −1 —— 洞。急转处点间距被压到
-零点几个单位，基线不到一个像素，一点噪声就能把方向甩过 90°。
+The second one is easy to miss. Building a quad from each endpoint's own normal
+turns it into a bowtie as soon as the two normals differ by more than 90
+degrees; the two lobes wind in opposite directions, one of them at −1, and that
+is a hole. At a sharp turn the points are a fraction of a unit apart, so a
+direction taken from immediate neighbours is mostly noise and swings past 90
+degrees easily.
 
-第三条我一开始按小角度公式估算缺口深度，算出千分之几个单位就放心跳过了。实际噪声
-会让相邻两段方向经常差 90° 以上，缺口深度是 `r(1−cos(θ/2))`，实测最深 1.9 个页面
-单位 —— 100% 缩放下看着像抗锯齿，放大到 600% 就是 9px 的豁口。
+The third one was estimated with a small-angle formula, which put the notch
+depth at thousandths of a unit and made it look safe to skip. Noise routinely
+makes consecutive segment directions differ by more than 90 degrees, where the
+depth is `r(1 − cos(θ/2))`; measured, it reached 1.9 page units — about 1.5px at
+100% zoom, where it passes for antialiasing, but a 9px gouge at 600%.
 
-## 测试怎么写
+## Writing the tests
 
-**测试数据必须带真实噪声。** 无噪声的合成笔迹上这些问题一个都不会出现。
+**Test data must carry realistic noise.** None of these problems appear on
+clean synthetic strokes.
 
-- 绕向一致性：用假的 canvas context 录下路径，算每个子路径的有向面积，正负号必须一致
-- 自交检测：四边形的两条对角边是否相交
-- 覆盖正确性：把渲染出的覆盖区域与数学上正确的笔迹区域（圆盘沿中心线扫过的并集）
-  逐点比对，统计漏填点数和最深缺口
+- *Winding consistency*: record the path through a fake canvas context and check
+  the signed area of every subpath has the same sign
+- *Self-intersection*: for each quad, check whether its two diagonals cross
+- *Coverage*: rasterise the rendered area and compare it point by point against
+  the mathematically correct stroke region (the union of discs swept along the
+  centreline), reporting missed points and the deepest notch
 
-**同时要清楚测试测不到什么。** 上面三个测试全都只验几何，验不到光栅化层的问题
-（比如 conflation artifact —— 见 Linebender/vello #49）。
+**Also be clear about what a test cannot see.** All three above check geometry
+only. They say nothing about the rasteriser — conflation artifacts, for
+instance (see Linebender/vello #49).
 
-## 没走的路
+## Roads not taken
 
-- **单轮廓**（左侧偏移 + 端帽 + 右侧反向）：只有一个子路径，结构上不会有 conflation
-  artifact，但急转处轮廓自交，出现 perfect-freehand 那个著名的 "hot elbows"。实测
-  几何误差 2.1%，视觉上像刺猬，不可用。
-- **等宽原生描边**：交给浏览器自己的描边器，绝对干净，但没有压感粗细。
-- **布尔并集求轮廓**：微软 Win2D 的 `CanvasGeometry.CreateInk` 之后调用 `Outline()`
-  干的就是这件事。canvas 2D 没有这个 API。
+- **Single outline** (left offset, end cap, right offset reversed): only one
+  subpath, so conflation artifacts are structurally impossible, but the outline
+  self-intersects at sharp turns and produces perfect-freehand's well-known
+  "hot elbows". Measured geometric error 2.1%; visually it looks like a
+  hedgehog. Unusable.
+- **Native constant-width stroke**: hand the centreline to the browser's own
+  stroker. Perfectly clean, but no pressure-driven width at all.
+- **Boolean union to an outline**: what Microsoft's Win2D does when it calls
+  `Outline()` after `CanvasGeometry.CreateInk()`. Canvas 2D has no such API.

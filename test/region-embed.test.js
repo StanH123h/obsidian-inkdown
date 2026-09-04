@@ -5,17 +5,17 @@ const stroke = (n, x0, y0, x1, y1) => ({ name: n, c:'#000', s:8,
   pts: Array.from({length: 20}, (_,i) => { const t=i/19;
     return { x: x0+(x1-x0)*t, y: y0+(y1-y0)*t, p: .4 }; }) });
 
-// 引用一个圈时实际执行的筛选逻辑（跟 embed.ts 里的一行一致）
+// The filter an embed actually performs (the same line as in embed.ts)
 const pick = (strokes, region) => strokes.filter(s => strokeInRegion(s, region)).map(s => s.name);
 
-const 外圈 = box('外圈', 100, 100, 400, 300);
-const 内圈 = box('内圈', 180, 150, 280, 250);
+const outer = box('outer', 100, 100, 400, 300);
+const inner = box('inner', 180, 150, 280, 250);
 
 const strokes = [
-  stroke('外圈内、内圈外的字', 120, 120, 160, 140),
-  stroke('内圈里的字',         200, 180, 260, 220),
-  stroke('横跨内圈边界的字',   250, 200, 330, 200),
-  stroke('完全在外圈之外的字', 500, 500, 560, 540),
+  stroke('inside outer, outside inner', 120, 120, 160, 140),
+  stroke('inside inner',              200, 180, 260, 220),
+  stroke('crossing inner boundary',   250, 200, 330, 200),
+  stroke('fully outside outer',       500, 500, 560, 540),
 ];
 
 let ok = true;
@@ -23,30 +23,31 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const t = (label, got, want) => {
   const p = eq(got, want);
   ok = ok && p;
-  console.log(`${p?'✅':'❌'} ${label}\n     得到 ${JSON.stringify(got)}\n     期望 ${JSON.stringify(want)}`);
+  console.log(`${p?'PASS':'FAIL'} ${label}\n     got      ${JSON.stringify(got)}\n     expected ${JSON.stringify(want)}`);
 };
 
-console.log('引用外圈时，内圈的存在完全不影响结果\n');
-const 有内圈 = pick(strokes, 外圈);
-const 没内圈 = pick(strokes, 外圈);   // 筛选只看笔迹和这一个多边形，本来就跟别的圈无关
-t('引用外圈 -> 拿到圈内所有笔迹（不管里面还有没有别的圈）',
-  有内圈, ['外圈内、内圈外的字', '内圈里的字', '横跨内圈边界的字']);
-t('有没有内圈，结果完全一样', 有内圈, 没内圈);
+console.log('Embedding the outer region: the inner one changes nothing\n');
+const withInner = pick(strokes, outer);
+const withoutInner = pick(strokes, outer);   // the filter only sees ink and this one polygon
+t('embed outer -> all ink inside it, regardless of nested regions',
+  withInner, ['inside outer, outside inner', 'inside inner', 'crossing inner boundary']);
+t('identical with and without the inner region', withInner, withoutInner);
 
-console.log('\n引用内圈时，只拿内圈里的\n');
-t('引用内圈', pick(strokes, 内圈), ['内圈里的字', '横跨内圈边界的字']);
+console.log('\nEmbedding the inner region: only its own ink\n');
+t('embed inner', pick(strokes, inner), ['inside inner', 'crossing inner boundary']);
 
-console.log('\n裁剪范围就是这个圈自己的包围盒，跟嵌套无关\n');
-const b = polyBounds(外圈.path);
-t('外圈的显示范围', [b.x, b.y, b.w, b.h], [100, 100, 300, 200]);
+console.log('\nThe clip box is the region\'s own bounds, unaffected by nesting\n');
+const b = polyBounds(outer.path);
+t('outer region display bounds', [b.x, b.y, b.w, b.h], [100, 100, 300, 200]);
 
-// 设计原则：原生内容渲染，引用不渲染。区域引用的入参只有笔迹和多边形，
-// 画布上的 wiki link 元素（doc.items）从来不参与 —— 结构上就传不进来。
-console.log('\n引用一个圈时，画布上的 wiki link 元素不参与\n');
-const 引用外圈用到的输入 = { strokes, region: 外圈 };
-t('区域引用的输入只有笔迹和多边形，没有 items 这一项',
-  Object.keys(引用外圈用到的输入).sort(), ['region', 'strokes']);
+// Design principle: own content renders, references do not. A region embed
+// takes only ink and a polygon; the canvas's wiki-link items (doc.items) never
+// take part -- structurally they cannot even be passed in.
+console.log('\nCanvas wiki-link items take no part in a region embed\n');
+const embedInputs = { strokes, region: outer };
+t('a region embed takes only ink and a polygon, no items',
+  Object.keys(embedInputs).sort(), ['region', 'strokes']);
 
-console.log('\n' + (ok ? '全部通过：区域之间彼此不知道对方存在，引用不形成链'
-                       : '有用例未通过'));
+console.log('\n' + (ok ? 'All passed: regions are unaware of each other, embeds form no chains'
+                       : 'Some cases failed'));
 process.exit(ok ? 0 : 1);
