@@ -56,25 +56,6 @@ export const S = {
 	scrollbar:
 		"position:absolute;right:2px;width:4px;border-radius:2px;pointer-events:none;" +
 		`background:${MUTED};opacity:0;transition:opacity .25s;`,
-	chip:
-		"position:absolute;pointer-events:auto;box-sizing:border-box;cursor:grab;" +
-		"padding:4px 11px;border-radius:9px;white-space:nowrap;font-size:19px;line-height:1.4;" +
-		`color:${ACCENT};background:var(--background-primary,#fff);` +
-		`border:1px solid ${ACCENT};touch-action:none;`,
-	chipMissing:
-		"position:absolute;pointer-events:auto;box-sizing:border-box;cursor:grab;" +
-		"padding:4px 11px;border-radius:9px;white-space:nowrap;font-size:19px;line-height:1.4;" +
-		"color:var(--text-error,#c0392b);background:var(--background-primary,#fff);" +
-		"border:1px dashed var(--text-error,#c0392b);touch-action:none;",
-	embedBox:
-		"position:absolute;pointer-events:auto;box-sizing:border-box;" +
-		`border:1px solid ${BORDER};border-radius:9px;overflow:hidden;` +
-		"background:var(--background-primary,#fff);touch-action:none;",
-	embedBar:
-		"display:flex;align-items:center;gap:6px;padding:5px 11px;cursor:grab;" +
-		"font-size:16px;background:var(--background-secondary,rgba(127,127,127,.08));" +
-		`color:${MUTED};touch-action:none;`,
-	embedBody: "padding:10px 13px;font-size:18px;",
 	// 区域的浮动条。定位用内容单位，但自身做反向缩放，
 	// 这样放大画布时按钮不会跟着变成巨无霸。
 	regionBar:
@@ -125,10 +106,6 @@ export const ICONS = {
 	lasso: [
 		"M12 4.5c4.4 0 8 2.5 8 5.6s-3.6 5.6-8 5.6-8-2.5-8-5.6 3.6-5.6 8-5.6z",
 		"M9 15.5c-.3 1.6-.1 2.9.7 3.6a2 2 0 0 0 3-.4",
-	],
-	link: [
-		"M10.2 13.8a4.5 4.5 0 0 0 6.7.5l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4l-1.5 1.5",
-		"M13.8 10.2a4.5 4.5 0 0 0-6.7-.5l-2.7 2.7a4.5 4.5 0 0 0 6.4 6.4l1.5-1.5",
 	],
 	trash: ["M4 7h16", "M9 7V5h6v2", "M7 7l1 13h8l1-13"],
 	rename: ["M4 20l4-1 9.5-9.5-3-3L5 16z", "M14.5 6.5l3 3"],

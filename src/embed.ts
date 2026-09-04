@@ -1,10 +1,7 @@
 /* 解析 [[目标]] / ![[目标#区域]]，并把内容渲染出来。
  * 两处共用：手写画布上的嵌入元素，以及普通 markdown 笔记里的 ![[某手写笔记#区域]]。 */
 
-import {
-	App, Component, MarkdownRenderChild, MarkdownRenderer,
-	parseLinktext, resolveSubpath, TFile,
-} from "obsidian";
+import { App, MarkdownRenderChild, parseLinktext, resolveSubpath, TFile } from "obsidian";
 import { Box, InkOpts, Region, Stroke, paintInk, polyBounds, strokeInRegion } from "./ink";
 import { isHandwritingData, isHandwritingFile, parse } from "./format";
 
@@ -59,27 +56,6 @@ function strokesBox(strokes: Stroke[]): Box {
 	}
 	if (!isFinite(x0)) return { x: 0, y: 0, w: 1, h: 1 };
 	return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-}
-
-/** 把解析结果画进 container。返回渲染高度（css px），墨迹嵌入才有意义。 */
-export async function renderResolved(
-	app: App, container: HTMLElement, r: Resolved,
-	cssWidth: number, comp: Component, opt: InkOpts, sourcePath: string,
-): Promise<void> {
-	container.empty();
-	if (r.kind === "missing") {
-		container.createSpan({
-			text: `未找到：${r.label}`,
-			attr: { style: "color:var(--text-error,#c0392b);font-size:13px;" },
-		});
-		return;
-	}
-	if (r.kind === "ink") {
-		const cv = container.createEl("canvas", { attr: { style: "display:block;max-width:100%;" } });
-		paintInk(cv, r.strokes, opt, r.box, cssWidth, r.clip);
-		return;
-	}
-	await MarkdownRenderer.render(app, r.text, container, sourcePath, comp);
 }
 
 /* ================= 普通笔记里的 ![[某手写笔记]] ================= */
