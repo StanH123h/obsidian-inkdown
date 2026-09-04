@@ -3,3 +3,4 @@ main.js
 *.js.map
 .dev-targets
 .test-build/
+todo.txt

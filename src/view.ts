@@ -60,6 +60,8 @@ export class HandwritingView extends TextFileView {
 	 *  settings, so they survive a restart and follow the vault across devices. */
 	private sizeIdx = 1;
 	private sizePop: HTMLElement | null = null;
+	private popOpens = 0;
+	private popInfo = "还没点过笔宽";
 
 	private get sizes() { return this.plugin.settings.sizes; }
 	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
@@ -214,9 +216,25 @@ export class HandwritingView extends TextFileView {
 			const b = bar.createEl("button", { attr: { "aria-label": `笔宽 ${sz}`, style: S.btn } });
 			sizeDots.push(b.createDiv({ attr: { style: S.dot(dotPx(sz)) } }));
 			b.addEventListener("click", () => {
+				this.popInfo = `点击了第 ${i} 档，当前档 ${this.sizeIdx}，浮层 ${this.sizePop ? "开着" : "关着"}`;
 				if (this.sizeIdx === i && !this.sizePop) this.openSizePop(i, b, sizeDots[i]);
 				else { this.closeSizePop(); this.sizeIdx = i; sync(); }
 			});
+			// Second, independent way in: a long press opens the slider from any
+			// width button, whether or not it is the active one.
+			let lp = 0;
+			b.addEventListener("pointerdown", () => {
+				window.clearTimeout(lp);
+				lp = window.setTimeout(() => {
+					this.sizeIdx = i;
+					sync();
+					this.openSizePop(i, b, sizeDots[i]);
+				}, 480);
+			});
+			const cancelLp = () => window.clearTimeout(lp);
+			b.addEventListener("pointerup", cancelLp);
+			b.addEventListener("pointercancel", cancelLp);
+			b.addEventListener("pointerleave", cancelLp);
 			return b;
 		});
 		sep();
@@ -255,7 +273,7 @@ export class HandwritingView extends TextFileView {
 	 *  on every input event, because saving refreshes every open view. */
 	private openSizePop(i: number, btn: HTMLElement, dot: HTMLElement) {
 		this.closeSizePop();
-		const pop = this.contentEl.createDiv({ attr: { style: S.sizePop } });
+		const pop = this.surface.createDiv({ attr: { style: S.sizePop } });
 		this.sizePop = pop;
 
 		const range = pop.createEl("input", {
@@ -279,15 +297,24 @@ export class HandwritingView extends TextFileView {
 		// Place it beside the button: to the left of a vertical toolbar, above a
 		// horizontal one. Clamped so it never leaves the view.
 		const r = btn.getBoundingClientRect();
-		const root = this.contentEl.getBoundingClientRect();
+		const root = this.surface.getBoundingClientRect();
 		const w = pop.offsetWidth || 260, h = pop.offsetHeight || 46;
-		if (this.narrow) {
-			pop.style.left = Math.min(Math.max(r.left - root.left + r.width / 2 - w / 2, 8), Math.max(8, root.width - w - 8)) + "px";
-			pop.style.top = Math.max(8, r.top - root.top - h - 10) + "px";
-		} else {
-			pop.style.left = Math.max(8, r.left - root.left - w - 10) + "px";
-			pop.style.top = Math.min(Math.max(r.top - root.top + r.height / 2 - h / 2, 8), Math.max(8, root.height - h - 8)) + "px";
-		}
+		let x = this.narrow
+			? r.left - root.left + r.width / 2 - w / 2
+			: r.left - root.left - w - 10;
+		let y = this.narrow
+			? r.top - root.top - h - 10
+			: r.top - root.top + r.height / 2 - h / 2;
+		// Clamp into the container. If the anchor maths produced something absurd
+		// (a zero-size button, a rect from before layout), fall back to a corner:
+		// a popup in the wrong place is still usable, an invisible one is not.
+		if (!Number.isFinite(x) || !Number.isFinite(y)) { x = 12; y = 12; }
+		x = Math.min(Math.max(x, 8), Math.max(8, root.width - w - 8));
+		y = Math.min(Math.max(y, 8), Math.max(8, root.height - h - 8));
+		pop.style.left = Math.round(x) + "px";
+		pop.style.top = Math.round(y) + "px";
+		this.popOpens++;
+		this.popInfo = `第 ${this.popOpens} 次，位置 ${Math.round(x)},${Math.round(y)}  尺寸 ${w}x${h}  容器 ${Math.round(root.width)}x${Math.round(root.height)}`;
 	}
 
 	private closeSizePop() {
@@ -1181,6 +1208,8 @@ export class HandwritingView extends TextFileView {
 			"tools 尺寸": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
 			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
 			"代码版本 / manifest": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
+			"笔宽档位 / 三档": `${this.sizeIdx} / [${this.sizes.join(", ")}]`,
+			"笔宽浮层": this.popInfo,
 			"窄屏模式": String(this.narrow),
 			"上次点击判定": this.lastHitInfo,
 			"上次手指按下": this.lastTouchInfo,
