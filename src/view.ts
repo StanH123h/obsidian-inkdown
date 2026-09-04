@@ -459,10 +459,14 @@ export class HandwritingView extends TextFileView {
 				this.tap = { x: e.clientX, y: e.clientY, finger: true };
 				this.armLongPress(p.x, p.y, true);
 
-				// 按在已选中的圈上 -> 准备拖它，否则准备平移。
+				// 按在任何圈上 -> 准备拖它，否则准备平移。
+				// 不要求"先选中才能拖"—— 那是我自己加的前提，手指按上去就该能拖。
 				// 两者都要等移动超过死区才真正开始，这样轻点不会被误判成拖动。
 				const hit = this.regionAt(p.x, p.y);
-				if (hit && hit.id === this.selRegion) {
+				this.lastTouchInfo = hit
+					? `按在「${hit.name}」上，待拖动`
+					: `按在空白处，待平移（当前选中：${this.selRegion ?? "无"}）`;
+				if (hit) {
 					this.fingerOn = { id: hit.id, x: e.clientX, y: e.clientY };
 					this.panFrom = null;
 				} else {
@@ -534,8 +538,11 @@ export class HandwritingView extends TextFileView {
 				if (this.fingerOn) {
 					if (Math.hypot(e.clientX - this.fingerOn.x, e.clientY - this.fingerOn.y) < 4) return;
 					const p = this.toPage(e);
-					this.startRegionDrag(this.fingerOn.id, p.x, p.y);
+					const id = this.fingerOn.id;
 					this.fingerOn = null;
+					if (this.selRegion !== id) this.select(id);   // 拖谁就选中谁，给个反馈
+					this.startRegionDrag(id, p.x, p.y);
+					this.lastTouchInfo += " -> 已开始拖动";
 					return;
 				}
 				if (this.panFrom) {
@@ -682,6 +689,7 @@ export class HandwritingView extends TextFileView {
 	}
 
 	private lastHitInfo = "还没点过";
+	private lastTouchInfo = "还没碰过";
 
 	private select(id: string | null, opts = false) {
 		if (this.selRegion === id && this.showOpts === opts) return;
@@ -1084,6 +1092,7 @@ export class HandwritingView extends TextFileView {
 			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
 			"窄屏模式": String(this.narrow),
 			"上次点击判定": this.lastHitInfo,
+			"上次手指按下": this.lastTouchInfo,
 			"当前选中区域": this.selRegion
 				? (this.doc.regions.find((r) => r.id === this.selRegion)?.name ?? "?") : "无",
 			"页数 / 缩放": `${this.pages} 页 / ${(this.zoom * 100).toFixed(0)}%`,
