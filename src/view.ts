@@ -173,6 +173,7 @@ export class HandwritingView extends TextFileView {
 			this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
 			this.ro.observe(root);        // decides the narrow layout
 			this.ro.observe(this.surface); // decides the canvas size
+			this.ro.observe(this.tools);   // wraps to two columns, moving the context bar
 			this.applyLayout();
 			this.resize();
 		} catch (e) {
@@ -250,6 +251,20 @@ export class HandwritingView extends TextFileView {
 
 	/** Notability's arrangement: the right bar picks a tool and never changes,
 	 *  the left bar shows that tool's configuration. */
+	/** Park the context column against the tool bar. The tool bar's size is
+	 *  content-driven -- it wraps into a second column when the buttons do not fit
+	 *  -- so a hardcoded offset would overlap it or leave a gap. */
+	private placeCtxBar() {
+		if (!this.ctxBar?.isConnected || !this.tools) return;
+		if (this.narrow) {
+			this.ctxBar.style.bottom = this.tools.offsetHeight + "px";
+			this.ctxBar.style.right = "";
+		} else {
+			this.ctxBar.style.right = this.tools.offsetWidth + "px";
+			this.ctxBar.style.bottom = "";
+		}
+	}
+
 	private buildContextBar() {
 		const bar = this.ctxBar;
 		if (!bar) return;
@@ -266,6 +281,7 @@ export class HandwritingView extends TextFileView {
 			bar.setAttribute("style", this.narrow ? S.ctxBarNarrow : S.ctxBar);
 			this.contentEl.insertBefore(bar, this.tools);
 		}
+		this.placeCtxBar();
 		const vert = !this.narrow;
 
 		const sep = () => bar.createDiv({ attr: { style: vert ? S.sep : S.sepNarrow } });
@@ -463,6 +479,7 @@ export class HandwritingView extends TextFileView {
 		}
 		this.recountPages();
 		this.clampPan();
+		this.placeCtxBar();
 		this.redrawAll();
 		this.rebuildOverlay();
 	}

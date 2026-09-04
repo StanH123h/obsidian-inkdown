@@ -16,11 +16,6 @@ const ACCENT = "var(--text-accent, #5b6ed6)";
 const HOVER = "var(--background-modifier-hover, rgba(127,127,127,.18))";
 const BORDER = "var(--background-modifier-border, rgba(127,127,127,.28))";
 
-/* Tool bar footprint. The context column is positioned against these, so they
- * have to stay in step with S.tools / S.toolsNarrow below. */
-const TOOLS_W = 56;
-const TOOLS_H = 58;
-
 const BTN =
 	"position:relative;display:flex;align-items:center;justify-content:center;flex:0 0 auto;" +
 	"width:40px;height:40px;padding:0;margin:0;border:0;border-radius:9px;" +
@@ -49,7 +44,7 @@ export const S = {
 		"background:var(--background-secondary, rgba(127,127,127,.07));",
 	toolsNarrow:
 		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
-		`gap:6px;flex:0 0 auto;width:100%;height:${TOOLS_H}px;padding:8px 10px;margin:0;box-sizing:border-box;` +
+		"gap:6px;flex:0 0 auto;width:100%;height:58px;padding:8px 10px;margin:0;box-sizing:border-box;" +
 		`overflow-x:auto;overflow-y:hidden;border-top:1px solid ${BORDER};` +
 		"background:var(--background-secondary, rgba(127,127,127,.07));",
 
@@ -113,10 +108,11 @@ export const S = {
 	// Left-hand context bar: the configuration for whichever tool is active.
 	// Positioned absolutely so it floats over the canvas instead of competing with
 	// it for width -- otherwise the drawing area jumps sideways every time the bar
-	// appears or disappears.
+	// appears or disappears. Its offset from the edge is measured at runtime, since
+	// the tool bar has no fixed width: it wraps into a second column when the
+	// buttons do not fit.
 	ctxBar:
 		"position:absolute;z-index:20;top:0;height:100%;width:72px;" +
-		`right:${TOOLS_W}px;` +
 		"display:flex;flex-direction:column;align-items:center;justify-content:flex-start;" +
 		"gap:7px;padding:10px 6px;margin:0;box-sizing:border-box;overflow:hidden;" +
 		`border-left:1px solid ${BORDER};box-shadow:-4px 0 14px rgba(0,0,0,.10);` +
@@ -124,7 +120,6 @@ export const S = {
 		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
 	ctxBarNarrow:
 		"position:absolute;z-index:20;left:0;right:0;height:58px;" +
-		`bottom:${TOOLS_H}px;` +
 		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
 		"gap:7px;padding:8px 10px;margin:0;box-sizing:border-box;" +
 		"overflow-x:auto;overflow-y:hidden;" +
