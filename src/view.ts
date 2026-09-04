@@ -74,6 +74,16 @@ export class HandwritingView extends TextFileView {
 	 * the pen-to-pixel chain, and the only slice we can observe from in here. */
 	private lagS: number[] = [];
 	private drawS: number[] = [];
+	/* Base-layer repaint: the pinch and pan path, which is a different cost from
+	 * drawS. That one redraws the stroke in hand; this one re-rasterises every
+	 * visible stroke, so it grows with the document and with zooming out. */
+	private paintS: number[] = [];
+	private paintReq: number | null = null;
+	private visStrokes = 0;
+	/** Theme colours for the page furniture. getComputedStyle forces a style
+	 *  recalculation, which is far too expensive to do inside a repaint that
+	 *  runs on every pinch event; cached until the theme changes. */
+	private theme: { page: string; desk: string; border: string; faint: string } | null = null;
 
 	private tool: Tool = "pen";
 	private color = COLORS[0];
@@ -177,6 +187,12 @@ export class HandwritingView extends TextFileView {
 			this.buildContextBar();
 			this.bindPointer();
 
+			// The only thing that can invalidate the cached page colours
+			this.registerEvent(this.app.workspace.on("css-change", () => {
+				this.theme = null;
+				this.redrawAll();
+			}));
+
 			this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
 			this.ro.observe(root);        // decides the narrow layout
 			this.ro.observe(this.surface); // decides the canvas size
@@ -208,6 +224,7 @@ export class HandwritingView extends TextFileView {
 
 	async onClose() {
 		this.ro?.disconnect();
+		if (this.paintReq != null) cancelAnimationFrame(this.paintReq);
 		window.clearTimeout(this.sbarTimer);
 		this.clearLongPress();
 		this.stopGlide();
@@ -578,8 +595,21 @@ export class HandwritingView extends TextFileView {
 
 	/* ============ Canvas rendering ============ */
 
+	/** Coalesce base-layer repaints to one per animation frame.
+	 *
+	 *  Pinch and pan deliver about 120 pointermove events a second on a 60Hz
+	 *  panel, and each one used to re-rasterise every visible stroke
+	 *  synchronously -- so half of that work was never shown, and a dense page
+	 *  zoomed out (where the viewport cull stops helping) stalled. Nothing reads
+	 *  the canvas back, so deferring a frame is safe at every call site. */
 	private redrawAll() {
+		if (this.paintReq != null) return;
+		this.paintReq = requestAnimationFrame(() => { this.paintReq = null; this.paintAll(); });
+	}
+
+	private paintAll() {
 		if (!this.surface) return;
+		const t0 = performance.now();
 		const cx = this.bctx;
 		cx.setTransform(1, 0, 0, 1, 0, 0);
 		cx.clearRect(0, 0, this.base.width, this.base.height);
@@ -589,26 +619,36 @@ export class HandwritingView extends TextFileView {
 		// Only draw ink inside the viewport; across many pages this skips almost
 		// all of the work
 		const top = this.panY - 40, bot = this.panY + this.viewH + 40;
+		let vis = 0;
 		for (const st of this.doc.strokes) {
 			const b = bboxOf(st);
 			if (b.y1 < top || b.y0 > bot) continue;
 			drawStroke(cx, st, this.opts(), true);
+			vis++;
 		}
+		this.visStrokes = vis;
 		for (const g of this.doc.regions)
 			this.drawRegionOutline(cx, g.path, g.id === this.selRegion ? "selected" : "idle");
 		this.redrawLive();
+		this.paintS.push(performance.now() - t0);
+		if (this.paintS.length > 120) this.paintS.shift();
 	}
 
 	/** Desk colour, the page, its frame and the page breaks. Zoomed out past the
 	 *  screen, an unframed page is impossible to tell from the background in dark
 	 *  mode. */
 	private drawPages(cx: CanvasRenderingContext2D) {
-		const st = getComputedStyle(this.contentEl);
-		const pick = (name: string, fb: string) => st.getPropertyValue(name).trim() || fb;
-		const page = pick("--background-primary", "#ffffff");
-		const desk = pick("--background-secondary", "rgba(127,127,127,.12)");
-		const border = pick("--background-modifier-border", "rgba(127,127,127,.45)");
-		const faint = pick("--text-faint", "rgba(127,127,127,.5)");
+		if (!this.theme) {
+			const st = getComputedStyle(this.contentEl);
+			const pick = (name: string, fb: string) => st.getPropertyValue(name).trim() || fb;
+			this.theme = {
+				page: pick("--background-primary", "#ffffff"),
+				desk: pick("--background-secondary", "rgba(127,127,127,.12)"),
+				border: pick("--background-modifier-border", "rgba(127,127,127,.45)"),
+				faint: pick("--text-faint", "rgba(127,127,127,.5)"),
+			};
+		}
+		const { page, desk, border, faint } = this.theme;
 		const H = this.contentH();
 
 		// Outside the page is the "desk", covering the whole viewport
@@ -1548,6 +1588,8 @@ export class HandwritingView extends TextFileView {
 			"prediction API": typeof (PointerEvent.prototype as any).getPredictedEvents === "function" ? "yes" : "no (we extrapolate)",
 			"input lag p50/p95/max": pct(this.lagS),
 			"our draw p50/p95/max": pct(this.drawS),
+			"base repaint p50/p95/max": pct(this.paintS),
+			"visible strokes": `${this.visStrokes} of ${this.doc.strokes.length}`,
 			"frame interval": this.evtStamps.length > 5
 				? (() => { const d: number[] = [];
 					for (let i = 1; i < this.evtStamps.length; i++) d.push(this.evtStamps[i] - this.evtStamps[i - 1]);
