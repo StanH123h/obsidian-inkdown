@@ -257,10 +257,9 @@ export class HandwritingView extends TextFileView {
 		this.syncCtx = null;
 
 		// Neither lasso has anything to configure, so the column is detached from
-		// the DOM entirely rather than merely hidden. Removing it lets the surface
-		// reclaim the width, and the ResizeObserver on the surface then resizes the
-		// canvas to match -- display:none did the first part but not the second,
-		// leaving the canvas 72px narrower than the area it was supposed to fill.
+		// the DOM entirely rather than merely hidden. It is positioned absolutely,
+		// floating over the canvas, so attaching and detaching it never resizes the
+		// drawing area -- the canvas used to jump sideways by 72px each time.
 		if (this.tool === "lasso" || this.tool === "wiki") { bar.remove(); return; }
 		if (!bar.isConnected) {
 			// Reapply the style: applyLayout skips the bar while it is detached
