@@ -68,6 +68,12 @@ export class HandwritingView extends TextFileView {
 	private lastT = -1;
 	private lowLatency = false;
 	private evtStamps: number[] = [];
+	/* Latency instrumentation. e.timeStamp and performance.now() share a time
+	 * origin, so the gap between them is how long the event spent in the system
+	 * input queue and WebView dispatch before our code saw it -- a real slice of
+	 * the pen-to-pixel chain, and the only slice we can observe from in here. */
+	private lagS: number[] = [];
+	private drawS: number[] = [];
 
 	private tool: Tool = "pen";
 	private color = COLORS[0];
@@ -894,15 +900,21 @@ export class HandwritingView extends TextFileView {
 				fresh.push(ev);
 			}
 			if (!fresh.length && e.timeStamp > this.lastT) { this.lastT = e.timeStamp; fresh.push(e); }
-			this.evtStamps.push(performance.now());
+			const t0 = performance.now();
+			this.evtStamps.push(t0);
 			if (this.evtStamps.length > 40) this.evtStamps.shift();
+			this.lagS.push(t0 - e.timeStamp);
+			if (this.lagS.length > 240) this.lagS.shift();
 
 			if (this.tool === "lasso" || this.tool === "wiki") {
 				for (const ev of fresh) { const p = this.toPage(ev); this.lasso?.push([p.x, p.y]); }
 			} else if (this.cur) {
 				for (const ev of fresh) this.cur.pts.push(this.toPage(ev));
 			}
+			const tDraw = performance.now();
 			this.schedule();
+			this.drawS.push(performance.now() - tDraw);
+			if (this.drawS.length > 240) this.drawS.shift();
 		});
 
 		const end = (e: PointerEvent) => {
@@ -1534,6 +1546,15 @@ export class HandwritingView extends TextFileView {
 			"low-latency canvas": this.lowLatency ? "desynchronized active" : "normal compositing",
 			"coalesced events API": typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "yes" : "no",
 			"prediction API": typeof (PointerEvent.prototype as any).getPredictedEvents === "function" ? "yes" : "no (we extrapolate)",
+			"input lag p50/p95/max": pct(this.lagS),
+			"our draw p50/p95/max": pct(this.drawS),
+			"frame interval": this.evtStamps.length > 5
+				? (() => { const d: number[] = [];
+					for (let i = 1; i < this.evtStamps.length; i++) d.push(this.evtStamps[i] - this.evtStamps[i - 1]);
+					d.sort((a, b) => a - b);
+					return d[d.length >> 1].toFixed(1) + " ms";
+				})() : "draw a stroke first",
+			"prediction lead": `${this.plugin.settings.predict} frames`,
 			"event rate": this.evtStamps.length > 5
 				? (1000 * (this.evtStamps.length - 1) /
 					(this.evtStamps[this.evtStamps.length - 1] - this.evtStamps[0])).toFixed(0) + " Hz"
@@ -1551,6 +1572,14 @@ export class HandwritingView extends TextFileView {
 		this.buildContextBar();
 		this.rebuildOverlay();
 	}
+}
+
+/** p50 / p95 / max of a sample buffer, in milliseconds */
+function pct(v: number[]): string {
+	if (v.length < 10) return "draw a stroke first";
+	const s = [...v].sort((a, b) => a - b);
+	const at = (q: number) => s[Math.min(s.length - 1, Math.floor(s.length * q))];
+	return `${at(0.5).toFixed(1)} / ${at(0.95).toFixed(1)} / ${s[s.length - 1].toFixed(1)} ms`;
 }
 
 /** Stroke bounding box, cached on the stroke, used to cull ink outside the
