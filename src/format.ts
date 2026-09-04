@@ -26,6 +26,7 @@
  *   %%
  */
 
+import { App, TFile } from "obsidian";
 import { PAGE_W, Region, Stroke, cleanRaw } from "./ink";
 
 /** 画布上的一个 wiki link 元素 */
@@ -47,8 +48,28 @@ export interface HwDoc {
 
 const INK_RE = /%%ink\n([\s\S]*?)\n%%/;
 
-export function isHandwritingPath(path: string): boolean {
+/* 手写笔记就是普通的 .md 文件，靠 frontmatter 里的 handwriting 标记识别。
+ *
+ * 早期用的是 .hw.md 这种复合后缀，但 Obsidian 眼里那种文件的 basename 是
+ * 「BBB.hw」（扩展名只认最后一个 .md），于是 [[BBB]] 解析不到，而且文件列表、
+ * 搜索、图谱里到处显示 BBB.hw。改成普通 .md 之后链接行为完全恢复正常。
+ * 旧文件继续按路径识别，不用迁移也能打开。 */
+
+export function isLegacyHandwritingPath(path: string): boolean {
 	return path.endsWith(".hw.md");
+}
+
+// 声明成类型守卫，调用处就不用再单独判空了
+export function isHandwritingFile(app: App, file: TFile | null): file is TFile {
+	if (!file || file.extension !== "md") return false;
+	if (isLegacyHandwritingPath(file.path)) return true;
+	const fm = app.metadataCache.getFileCache(file)?.frontmatter;
+	return !!fm && fm.handwriting != null;
+}
+
+/** 直接看内容判断。用于元数据缓存还没就绪、或者拿不到 TFile 的场合。 */
+export function isHandwritingData(data: string): boolean {
+	return /^---[\s\S]*?^handwriting:/m.test(data.slice(0, 800)) || data.includes("%%ink");
 }
 
 export const newId = () => Math.random().toString(36).slice(2, 8);

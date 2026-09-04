@@ -6,7 +6,7 @@ import {
 	parseLinktext, resolveSubpath, TFile,
 } from "obsidian";
 import { Box, InkOpts, Region, Stroke, paintInk, polyBounds, strokeInRegion } from "./ink";
-import { isHandwritingPath, parse } from "./format";
+import { isHandwritingData, isHandwritingFile, parse } from "./format";
 
 export type Resolved =
 	| { kind: "missing"; label: string }
@@ -18,8 +18,10 @@ export async function resolveTarget(app: App, target: string, sourcePath: string
 	const file = app.metadataCache.getFirstLinkpathDest(path, sourcePath);
 	if (!file) return { kind: "missing", label: target };
 
-	if (isHandwritingPath(file.path)) {
-		const doc = parse(await app.vault.cachedRead(file));
+	// 先读内容再判断，不依赖元数据缓存是否就绪 —— 嵌入随时可能在缓存之前渲染
+	const raw = await app.vault.cachedRead(file);
+	if (isHandwritingData(raw)) {
+		const doc = parse(raw);
 		if (subpath) {
 			const name = subpath.replace(/^#+/, "").trim();
 			// 同名区域取第一个 —— 跟 Obsidian 解析同名标题的行为一致
@@ -37,7 +39,7 @@ export async function resolveTarget(app: App, target: string, sourcePath: string
 	}
 
 	// 普通 markdown：有子路径就切出对应的标题/区块
-	let text = await app.vault.cachedRead(file);
+	let text = raw;
 	if (subpath) {
 		const cache = app.metadataCache.getFileCache(file);
 		const res = cache ? resolveSubpath(cache, subpath) : null;
@@ -107,7 +109,7 @@ export function embedProcessor(app: App, getOpt: () => InkOpts) {
 			if (!src) return;
 			const { path } = parseLinktext(src);
 			const f = app.metadataCache.getFirstLinkpathDest(path, ctx.sourcePath);
-			if (!f || !isHandwritingPath(f.path)) return;
+			if (!isHandwritingFile(app, f)) return;
 			node.empty();
 			node.addClass("hw-embed");
 			node.setAttribute("style", "display:block;");

@@ -1,5 +1,5 @@
 import { App, Modal, Notice, Setting } from "obsidian";
-import { isHandwritingPath, parse, sanitizeName } from "./format";
+import { isHandwritingFile, parse, sanitizeName } from "./format";
 
 /* ================= 给区域命名 ================= */
 
@@ -120,7 +120,7 @@ export class LinkModal extends Modal {
 		if (hash >= 0) {
 			const base = q.slice(0, hash);
 			const f = this.app.metadataCache.getFirstLinkpathDest(base, "");
-			if (f && isHandwritingPath(f.path)) {
+			if (isHandwritingFile(this.app, f)) {
 				const needle = q.slice(hash + 1).toLowerCase();
 				this.app.vault.cachedRead(f).then((data) => {
 					if (this.target.trim() !== q) return;      // 输入已经变了
@@ -140,8 +140,9 @@ export class LinkModal extends Modal {
 			.slice(0, 12);
 		for (const f of files) {
 			const name = f.basename.replace(/\.hw$/, "");
-			row(name, isHandwritingPath(f.path) ? "手写" : f.parent?.path ?? "", () => {
-				this.target = isHandwritingPath(f.path) ? f.basename : name;
+			const folder = f.parent?.path ?? "";   // 先取出来：类型守卫会把 else 分支收窄成 never
+			row(name, isHandwritingFile(this.app, f) ? "手写" : folder, () => {
+				this.target = f.basename;
 				this.close2();
 			});
 		}

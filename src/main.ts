@@ -1,6 +1,6 @@
 import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, Setting, TFile, WorkspaceLeaf } from "obsidian";
 import { HandwritingView, VIEW_TYPE } from "./view";
-import { emptyDoc, isHandwritingPath } from "./format";
+import { emptyDoc, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
 
 export interface HandwritingSettings {
@@ -48,6 +48,8 @@ export default class HandwritingPlugin extends Plugin {
 		// 这里在布局变化后把它换成手写视图。
 		// 这是整套方案里唯一一处依赖非公开行为的地方（Excalidraw 也是这么做的）。
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.claimLeaves()));
+		// 识别靠 frontmatter，所以缓存就绪后要再扫一遍 —— 启动时可能先于缓存打开文件
+		this.registerEvent(this.app.metadataCache.on("resolved", () => this.claimLeaves()));
 		this.app.workspace.onLayoutReady(() => this.claimLeaves());
 
 		this.addCommand({
@@ -62,12 +64,29 @@ export default class HandwritingPlugin extends Plugin {
 			checkCallback: (checking) => {
 				const leaf = this.app.workspace.getMostRecentLeaf();
 				const file = this.currentFile(leaf);
-				if (!file || !isHandwritingPath(file.path)) return false;
+				if (!isHandwritingFile(this.app, file)) return false;
 				if (!checking) {
 					if (leaf!.view.getViewType() === VIEW_TYPE) this.toMarkdown(leaf!);
 					else this.toHandwriting(leaf!, file);
 				}
 				return true;
+			},
+		});
+
+		this.addCommand({
+			id: "migrate-hw-md",
+			name: "迁移：把 .hw.md 重命名为 .md",
+			callback: async () => {
+				const old = this.app.vault.getMarkdownFiles().filter((f) => f.path.endsWith(".hw.md"));
+				if (!old.length) { new Notice("没有 .hw.md 文件需要迁移"); return; }
+				let done = 0;
+				for (const f of old) {
+					// 用 fileManager.renameFile，它会自动把指向这个文件的链接一起改掉
+					const to = f.path.replace(/\.hw\.md$/, ".md");
+					if (this.app.vault.getAbstractFileByPath(to)) continue;   // 重名就跳过
+					try { await this.app.fileManager.renameFile(f, to); done++; } catch (e) { /* 跳过 */ }
+				}
+				new Notice(`已迁移 ${done} / ${old.length} 个文件`);
 			},
 		});
 
@@ -111,7 +130,7 @@ export default class HandwritingPlugin extends Plugin {
 	private claimLeaves() {
 		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
 			const file = (leaf.view as MarkdownView).file;
-			if (file && isHandwritingPath(file.path) && !this.bypass.has(file.path)) {
+			if (file && isHandwritingFile(this.app, file) && !this.bypass.has(file.path)) {
 				this.toHandwriting(leaf, file);
 			}
 		}
@@ -138,7 +157,7 @@ export default class HandwritingPlugin extends Plugin {
 		const d = new Date();
 		const pad = (n: number) => String(n).padStart(2, "0");
 		const title = `手写 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`;
-		const path = `${folder}${title}.hw.md`;
+		const path = `${folder}${title}.md`;
 
 		try {
 			const file = await this.app.vault.create(path, emptyDoc(title));
