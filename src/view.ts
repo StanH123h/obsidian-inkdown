@@ -972,7 +972,9 @@ export class HandwritingView extends TextFileView {
 			if (this.selDrag) {
 				const d = this.selDrag;
 				this.selDrag = null;
-				if (d.moved && this.sel) {
+				// Dragging an empty ring moves no ink, so the document is unchanged:
+				// nothing to undo and nothing to save
+				if (d.moved && this.sel?.strokes.length) {
 					this.undoStack.push({ kind: "sel-move", strokes: [...this.sel.strokes], dx: d.dx, dy: d.dy });
 					this.recountPages();
 					this.requestSave();
@@ -1257,10 +1259,13 @@ export class HandwritingView extends TextFileView {
 	 *  a stroke only partly inside still belongs to it, so deleting takes the
 	 *  whole stroke rather than cutting it. Unlike a Wiki region this is
 	 *  transient -- it is never named and never saved. */
+	/** An empty ring is kept. Dropping it read as "the app decided my gesture did
+	 *  not count": you drew something and it vanished. It stays, and dragging or
+	 *  deleting it simply has nothing to act on. */
 	private finishSelection(path: [number, number][]) {
 		const region: Region = { id: "sel", name: "", path };
 		const strokes = this.doc.strokes.filter((st) => strokeInRegion(st, region));
-		this.sel = strokes.length ? { path, strokes, showOpts: false } : null;
+		this.sel = { path, strokes, showOpts: false };
 		this.redrawLive();
 		this.rebuildOverlay();
 	}
@@ -1285,6 +1290,9 @@ export class HandwritingView extends TextFileView {
 
 	private deleteSelection() {
 		if (!this.sel) return;
+		// An empty ring has nothing to delete, so deleting it just dismisses it --
+		// no undo step and no save for a document that did not change
+		if (!this.sel.strokes.length) { this.clearSelection(); return; }
 		const before = this.doc.strokes;
 		const gone = new Set(this.sel.strokes);
 		this.doc.strokes = before.filter((st) => !gone.has(st));
