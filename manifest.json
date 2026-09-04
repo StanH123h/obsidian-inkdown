@@ -1,7 +1,7 @@
 {
   "id": "inklink",
   "name": "Inklink",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "minAppVersion": "1.5.0",
   "description": "Handwriting that links. Lasso part of a page, name it, and reference it from anywhere as [[note#region]].",
   "author": "lubenwei",

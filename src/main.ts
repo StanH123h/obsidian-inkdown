@@ -112,13 +112,17 @@ export default class HandwritingPlugin extends Plugin {
 			callback: () => new DiagModal(this.app, this.collectDiagnostics()).open(),
 		});
 
-		// Right-click a folder on desktop, long-press it on mobile
-		this.registerEvent(this.app.workspace.on("file-menu", (menu: Menu, f: TAbstractFile) => {
-			if (!(f instanceof TFolder)) return;
+		// Right-click a folder on desktop, long-press it on mobile.
+		// "action-primary" is the section holding New note and New folder, which
+		// is also where the Canvas and Bases core plugins put theirs.
+		this.registerEvent(this.app.workspace.on("file-menu", (menu: Menu, f: TAbstractFile, source: string) => {
+			if (source !== "file-explorer-context-menu" || !(f instanceof TFolder)) return;
 			menu.addItem((item) => item
+				.setSection("action-primary")
 				.setTitle(t("cmd.newNoteHere"))
 				.setIcon("pen-tool")
 				.onClick(() => this.createNote(f)));
+			this.sitUnderNewNote(menu);
 		}));
 
 		this.addRibbonIcon("pen-tool", t("cmd.newNote"), () => this.createNote());
@@ -185,6 +189,29 @@ export default class HandwritingPlugin extends Plugin {
 	}
 
 	/* ============ Creating notes ============ */
+
+	/** Move the item just added to sit immediately below "New note".
+	 *
+	 *  Menu.sort buckets items by section and keeps insertion order inside each
+	 *  bucket, so landing in "action-primary" alone puts us last in that group,
+	 *  below New folder and whatever Canvas and Bases added. Being adjacent to
+	 *  New note means being adjacent in the items array.
+	 *
+	 *  `items` is not in the public API, hence the shape checks: if any of this
+	 *  stops holding, the item simply stays where addItem left it, which is the
+	 *  right section but the wrong row -- never an exception during a menu open.
+	 */
+	private sitUnderNewNote(menu: Menu) {
+		const items = (menu as unknown as { items?: { section?: string }[] }).items;
+		if (!Array.isArray(items) || items.length < 2) return;
+		const mine = items[items.length - 1];
+		if (mine?.section !== "action-primary") return;
+		// Core adds New note first, so it is the first item of this section
+		const first = items.findIndex((it) => it?.section === "action-primary");
+		if (first < 0 || first + 1 >= items.length - 1) return;
+		items.pop();
+		items.splice(first + 1, 0, mine);
+	}
 
 	/** @param into  the folder to create in. Without one, Obsidian's own
 	 *  "Default location for new notes" decides. */
