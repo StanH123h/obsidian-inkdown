@@ -63,6 +63,9 @@ export class HandwritingView extends TextFileView {
 	private touches = new Map<number, { x: number; y: number }>();
 	private pinch: { d: number; cx: number; cy: number; zoom: number } | null = null;
 	private panFrom: { x: number; y: number } | null = null;
+	/** 最近几次平移的采样，抬手时用来估算甩动速度 */
+	private velSamples: { t: number; x: number; y: number }[] = [];
+	private glideRaf = 0;
 	private clip!: HTMLDivElement;
 	private sbar!: HTMLDivElement;
 	private sbarTimer = 0;
@@ -147,7 +150,7 @@ export class HandwritingView extends TextFileView {
 		for (const d of this.seps) d.setAttribute("style", narrow ? S.sepNarrow : S.sep);
 	}
 
-	async onClose() { this.ro?.disconnect(); window.clearTimeout(this.sbarTimer); }
+	async onClose() { this.ro?.disconnect(); window.clearTimeout(this.sbarTimer); this.stopGlide(); }
 
 	/* ================= 工具栏 ================= */
 
@@ -312,13 +315,31 @@ export class HandwritingView extends TextFileView {
 		this.redrawLive();
 	}
 
-	/** 页面底色和分页线 */
+	/** 桌面底色 + 纸张 + 描边 + 分页线。
+	 *  缩到比屏幕还小的时候，如果纸张没有边界，深色模式下根本分不清哪块是画布。 */
 	private drawPages(cx: CanvasRenderingContext2D) {
-		const style = getComputedStyle(this.contentEl);
-		cx.fillStyle = style.getPropertyValue("--background-primary").trim() || "#fff";
-		cx.fillRect(0, 0, PAGE_W, this.contentH());
+		const st = getComputedStyle(this.contentEl);
+		const pick = (name: string, fb: string) => st.getPropertyValue(name).trim() || fb;
+		const page = pick("--background-primary", "#ffffff");
+		const desk = pick("--background-secondary", "rgba(127,127,127,.12)");
+		const border = pick("--background-modifier-border", "rgba(127,127,127,.45)");
+		const faint = pick("--text-faint", "rgba(127,127,127,.5)");
+		const H = this.contentH();
+
+		// 纸张外面是"桌面"，铺满整个视口
+		cx.fillStyle = desk;
+		cx.fillRect(this.panX - 8, this.panY - 8, this.viewW + 16, this.viewH + 16);
+
+		// 纸张本身。只画视口附近那一段，长文档不必整张铺
+		const y0 = Math.max(0, this.panY - 60), y1 = Math.min(H, this.panY + this.viewH + 60);
+		if (y1 > y0) {
+			cx.fillStyle = page;
+			cx.fillRect(0, y0, PAGE_W, y1 - y0);
+		}
+
 		cx.save();
-		cx.strokeStyle = style.getPropertyValue("--background-modifier-border").trim() || "rgba(127,127,127,.35)";
+		// 分页虚线
+		cx.strokeStyle = border;
 		cx.lineWidth = 1 / this.scale;
 		cx.setLineDash([8 / this.scale, 6 / this.scale]);
 		const from = Math.max(1, Math.floor(this.panY / PAGE_H));
@@ -328,20 +349,28 @@ export class HandwritingView extends TextFileView {
 			cx.beginPath(); cx.moveTo(0, y); cx.lineTo(PAGE_W, y); cx.stroke();
 		}
 		cx.setLineDash([]);
-		cx.fillStyle = style.getPropertyValue("--text-faint").trim() || "rgba(127,127,127,.45)";
-		cx.font = `${14 / this.scale * 1.6}px sans-serif`;
-		for (let k = from - 1; k < to; k++) {
-			if (k < 0) continue;
-			cx.fillText(`${k + 1} / ${this.pages}`, PAGE_W - 90, k * PAGE_H + 40);
+
+		// 纸张外框：整个文档一个矩形，超出视口的部分由 canvas 自己裁掉
+		cx.lineWidth = 2 / this.scale;
+		cx.strokeStyle = border;
+		cx.strokeRect(0, 0, PAGE_W, H);
+
+		// 页码
+		cx.fillStyle = faint;
+		cx.font = `${22 / this.scale}px sans-serif`;
+		cx.textAlign = "right";
+		for (let k = Math.max(0, from - 1); k < to; k++) {
+			cx.fillText(`${k + 1} / ${this.pages}`, PAGE_W - 26, k * PAGE_H + 46);
 		}
+		cx.textAlign = "left";
 		cx.restore();
 	}
 
 	private drawRegionOutline(cx: CanvasRenderingContext2D, path: [number, number][], active: boolean) {
 		if (path.length < 2) return;
 		cx.save();
-		cx.setLineDash([5 / this.scale * 1.4, 4 / this.scale * 1.4]);
-		cx.lineWidth = 1.4 / this.scale * 1.4;
+		cx.setLineDash([7 / this.scale, 6 / this.scale]);
+		cx.lineWidth = 2 / this.scale;
 		cx.strokeStyle = active ? "rgba(91,110,214,.95)" : "rgba(91,110,214,.45)";
 		pathToCanvas(cx, path);
 		cx.stroke();
@@ -379,16 +408,18 @@ export class HandwritingView extends TextFileView {
 			// 笔已经落下时，手掌/手指一律无视 —— 否则写字时手掌搭上去页面就滚了
 			if (finger && this.drawing && !this.plugin.settings.allowFinger) return;
 			if (finger) {
+				this.stopGlide();
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				el.setPointerCapture(e.pointerId);
 				if (this.touches.size >= 2) { this.abortStroke(); this.panFrom = null; return; }
 				if (!this.plugin.settings.allowFinger) {
 					this.panFrom = { x: e.clientX, y: e.clientY };
+					this.velSamples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
 					return;
 				}
 			}
 			// 笔落下时接管一切：丢掉正在进行的手指平移
-			if (!finger) { this.touches.clear(); this.panFrom = null; this.pinch = null; }
+			if (!finger) { this.stopGlide(); this.touches.clear(); this.panFrom = null; this.pinch = null; }
 			e.preventDefault();
 			el.setPointerCapture(e.pointerId);
 			this.drawing = true;
@@ -410,6 +441,8 @@ export class HandwritingView extends TextFileView {
 					this.panX -= (e.clientX - this.panFrom.x) / this.scale;
 					this.panY -= (e.clientY - this.panFrom.y) / this.scale;
 					this.panFrom = { x: e.clientX, y: e.clientY };
+					this.velSamples.push({ t: performance.now(), x: e.clientX, y: e.clientY });
+					if (this.velSamples.length > 8) this.velSamples.shift();
 					this.syncViewport();
 					return;
 				}
@@ -447,6 +480,7 @@ export class HandwritingView extends TextFileView {
 					this.panFrom = { x: t.x, y: t.y };
 				} else if (this.touches.size === 0) {
 					this.panFrom = null;
+					this.startGlide();
 				}
 				if (!this.plugin.settings.allowFinger) return;
 			}
@@ -472,6 +506,7 @@ export class HandwritingView extends TextFileView {
 		// 桌面端：滚轮滚动，Ctrl/⌘ + 滚轮以指针为中心缩放
 		this.registerDomEvent(el, "wheel", (e: WheelEvent) => {
 			e.preventDefault();
+			this.stopGlide();
 			if (e.ctrlKey || e.metaKey) {
 				const p = this.toPage(e);
 				this.setZoom(this.zoom * Math.exp(-e.deltaY / 300), p.x, p.y, e.clientX, e.clientY);
@@ -481,6 +516,45 @@ export class HandwritingView extends TextFileView {
 				this.syncViewport();
 			}
 		});
+	}
+
+	private stopGlide() {
+		if (this.glideRaf) { cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
+	}
+
+	/** 惯性滚动：抬手后按指数衰减继续滑，撞到边界就停。
+	 *  没有这个，手一停画面就死住，手感很硬 —— 浏览器和所有原生列表都有这个减速过程。 */
+	private startGlide() {
+		const s = this.velSamples;
+		if (s.length < 2) return;
+		const last = s[s.length - 1];
+		let first = s[0];
+		for (let i = s.length - 1; i >= 0; i--) {
+			if (last.t - s[i].t <= 90) first = s[i]; else break;   // 只用最后 90ms，避免被早期慢速拖累
+		}
+		const dt = last.t - first.t;
+		if (dt < 8) return;
+		// 屏幕像素/ms -> 内容单位/ms（平移方向与手指相反）
+		let vx = -(last.x - first.x) / dt / this.scale;
+		let vy = -(last.y - first.y) / dt / this.scale;
+		if (Math.hypot(vx, vy) < 0.03) return;
+
+		let prev = performance.now();
+		const step = () => {
+			const now = performance.now();
+			const d = Math.min(now - prev, 48);   // 掉帧时不要一下窜出去
+			prev = now;
+			const wantX = this.panX + vx * d, wantY = this.panY + vy * d;
+			this.panX = wantX; this.panY = wantY;
+			this.syncViewport();                  // 内部会 clamp
+			if (Math.abs(this.panY - wantY) > 1e-6) vy = 0;   // 撞到上下边界
+			if (Math.abs(this.panX - wantX) > 1e-6) vx = 0;
+			const decay = Math.pow(0.9975, d);    // 约 1 秒滑停，跟 iOS 手感接近
+			vx *= decay; vy *= decay;
+			if (Math.hypot(vx, vy) < 0.015) { this.glideRaf = 0; return; }
+			this.glideRaf = requestAnimationFrame(step);
+		};
+		this.glideRaf = requestAnimationFrame(step);
 	}
 
 	private abortStroke() {
