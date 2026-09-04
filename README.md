@@ -86,6 +86,17 @@ Together this keeps references from forming chains or cycles, and stops a
 distant edit from silently changing what is displayed here. A region is a
 **leaf** on the canvas, not a branch.
 
+## Languages
+
+English and Chinese. Which one is used follows Obsidian's display language,
+falling back to the browser locale; anything that is not Chinese gets English.
+The setting can also pin one explicitly.
+
+Two things deliberately do not follow the UI language: the diagnostics panel,
+which is a debugging tool rather than a feature, and the `## Regions` /
+`## Links` sections generated into notes, which stay in English so a file means
+the same thing whoever opens it.
+
 ## Features
 
 - Pressure-sensitive ink (Apple Pencil), one-euro filter and tip prediction to

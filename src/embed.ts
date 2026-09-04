@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 /* Resolve [[target]] / ![[target#region]] and render what it points at.
  * Shared by two callers: embed items on the handwriting canvas, and
  * ![[note#region]] inside ordinary markdown notes. */
@@ -77,8 +78,8 @@ export function renderResolved(
 		text,
 		attr: { style: "color:var(--text-error,#c0392b);font-size:15px;" },
 	});
-	if (r.kind === "missing") { warn(`未找到：${r.label}`); return; }
-	if (r.kind === "md") { warn("只能引用手写内容，普通文档不能嵌在画布上"); return; }
+	if (r.kind === "missing") { warn(t("embed.missing", r.label)); return; }
+	if (r.kind === "md") { warn(t("embed.handwritingOnly")); return; }
 	const cv = container.createEl("canvas", { attr: { style: "display:block;max-width:100%;" } });
 	paintInk(cv, r.strokes, opt, r.box, cssWidth, r.clip);
 }
@@ -98,7 +99,7 @@ class InkEmbed extends MarkdownRenderChild {
 		const el = this.containerEl;
 		el.empty();
 		const r = await resolveTarget(this.app, this.target, this.sourcePath);
-		if (r.kind !== "ink") { el.createSpan({ text: `未找到：${this.target}` }); return; }
+		if (r.kind !== "ink") { el.createSpan({ text: t("embed.missing", this.target) }); return; }
 		const width = Math.max(el.clientWidth || el.parentElement?.clientWidth || 600, 120);
 		const cv = el.createEl("canvas", { attr: { style: "display:block;max-width:100%;" } });
 		paintInk(cv, r.strokes, this.opt, r.box, width, r.clip);

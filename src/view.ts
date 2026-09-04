@@ -7,6 +7,7 @@ import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format
 import { renderResolved, resolveTarget } from "./embed";
 import { LinkModal, NameRegionModal } from "./modals";
 import { ICONS, S, drawIcon } from "./styles";
+import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
 
 /** Injected by esbuild at build time; see esbuild.config.mjs */
@@ -119,7 +120,7 @@ export class HandwritingView extends TextFileView {
 
 	getViewType() { return VIEW_TYPE; }
 	getIcon() { return "pen-tool"; }
-	getDisplayText() { return this.file?.basename.replace(/\.hw$/, "") ?? "手写笔记"; }
+	getDisplayText() { return this.file?.basename.replace(/\.hw$/, "") ?? t("view.title"); }
 
 	/* ============ TextFileView contract ============ */
 
@@ -179,7 +180,7 @@ export class HandwritingView extends TextFileView {
 		} catch (e) {
 			root.setAttribute("style", "padding:16px;overflow:auto;-webkit-user-select:text;user-select:text;");
 			root.empty();
-			root.createEl("h3", { text: "手写视图加载失败" });
+			root.createEl("h3", { text: t("view.loadFailed") });
 			root.createEl("pre", {
 				text: String((e as Error)?.stack || e),
 				attr: { style: "white-space:pre-wrap;font-size:12px;" },
@@ -220,17 +221,17 @@ export class HandwritingView extends TextFileView {
 		};
 		const sep = () => this.seps.push(bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } }));
 
-		const penBtn = btn("pen", "笔", () => { this.tool = "pen"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
-		const eraBtn = btn("eraser", "橡皮", () => { this.tool = "eraser"; this.clearSelection(); sync(); this.buildContextBar(); });
-		const lasBtn = btn("lasso", "套索：圈选内容", () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
-		const wikiBtn = btn("lasso", "Wiki 套索：圈一块内容并命名，供 [[笔记#区域]] 引用", () => { this.tool = "wiki"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
+		const penBtn = btn("pen", t("tool.pen"), () => { this.tool = "pen"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
+		const eraBtn = btn("eraser", t("tool.eraser"), () => { this.tool = "eraser"; this.clearSelection(); sync(); this.buildContextBar(); });
+		const lasBtn = btn("lasso", t("tool.lasso"), () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
+		const wikiBtn = btn("lasso", t("tool.wiki"), () => { this.tool = "wiki"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
 		wikiBtn.createDiv({ text: "Wiki", attr: { style: S.btnBadge } });
 		sep();
 
-		btn("fit", "适应页宽（重置缩放）", () => this.fitWidth());
-		btn("link", "插入 wiki 链接", () => this.addLink());
-		btn("undo", "撤销", () => this.undo());
-		btn("code", "看 Markdown 源码", () => this.plugin.toMarkdown(this.leaf));
+		btn("fit", t("tool.fit"), () => this.fitWidth());
+		btn("link", t("tool.link"), () => this.addLink());
+		btn("undo", t("tool.undo"), () => this.undo());
+		btn("code", t("tool.source"), () => this.plugin.toMarkdown(this.leaf));
 
 		// The version is printed on the toolbar: when debugging across iCloud it is
 		// the fastest way to confirm which build is actually running. It comes from
@@ -289,7 +290,7 @@ export class HandwritingView extends TextFileView {
 		if (this.tool === "pen") {
 			const dots: HTMLElement[] = [];
 			const btns = this.sizes.map((sz, i) => {
-				const b = bar.createEl("button", { attr: { "aria-label": `笔宽 ${sz}`, style: S.btn } });
+				const b = bar.createEl("button", { attr: { "aria-label": t("ctx.penWidth", sz), style: S.btn } });
 				dots.push(b.createDiv({ attr: { style: S.dot(dotPx(sz)) } }));
 				b.addEventListener("click", () => { this.sizeIdx = i; sync(); });
 				return b;
@@ -302,13 +303,13 @@ export class HandwritingView extends TextFileView {
 				(v) => {
 					this.sizes[this.sizeIdx] = v;
 					dots[this.sizeIdx].setAttribute("style", S.dot(dotPx(v)));
-					btns[this.sizeIdx].setAttribute("aria-label", `笔宽 ${v}`);
+					btns[this.sizeIdx].setAttribute("aria-label", t("ctx.penWidth", v));
 				},
 				() => this.plugin.saveSettings());
 			sep();
 
 			const colorDots = COLORS.map((c) => {
-				const b = bar.createEl("button", { attr: { "aria-label": "颜色", style: S.btn } });
+				const b = bar.createEl("button", { attr: { "aria-label": t("ctx.color"), style: S.btn } });
 				const d = b.createDiv({ attr: { style: S.colorDot(c, false) } });
 				b.addEventListener("click", () => { this.color = c; sync(); });
 				return d;
@@ -326,7 +327,7 @@ export class HandwritingView extends TextFileView {
 
 		if (this.tool === "eraser") {
 			const seg = this.makeSegment(bar, vert,
-				[{ label: "整笔", value: "stroke" }, { label: "精确", value: "precise" }],
+				[{ label: t("ctx.eraseStroke"), value: "stroke" }, { label: t("ctx.erasePrecise"), value: "precise" }],
 				() => this.plugin.settings.eraserMode,
 				(v) => {
 					this.plugin.settings.eraserMode = v;
@@ -748,8 +749,8 @@ export class HandwritingView extends TextFileView {
 				}
 				const hit = this.regionAt(p.x, p.y);
 				this.lastTouchInfo = hit
-					? `按在「${hit.name}」上，待拖动`
-					: `按在空白处，待平移（当前选中：${this.selRegion ?? "无"}）`;
+					? `on "${hit.name}", drag pending`
+					: `on empty space, pan pending (selected: ${this.selRegion ?? "none"})`;
 				if (hit) {
 					this.fingerOn = { id: hit.id, x: e.clientX, y: e.clientY };
 					this.panFrom = null;
@@ -851,7 +852,7 @@ export class HandwritingView extends TextFileView {
 					}
 					if (this.selRegion !== id) this.select(id);   // selecting what you drag gives feedback
 					this.startRegionDrag(id, p.x, p.y);
-					this.lastTouchInfo += " -> 已开始拖动";
+					this.lastTouchInfo += " -> drag started";
 					return;
 				}
 				if (this.panFrom) {
@@ -1024,13 +1025,13 @@ export class HandwritingView extends TextFileView {
 		}
 
 		const hit = inner ?? near;
-		this.lastHitInfo = `(${x.toFixed(0)},${y.toFixed(0)}) 共 ${this.doc.regions.length} 个区域 -> `
-			+ (hit ? `命中「${hit.name}」(${inner ? "圈内" : `轮廓 ${nearD.toFixed(0)} 单位`})` : "未命中");
+		this.lastHitInfo = `(${x.toFixed(0)},${y.toFixed(0)}), ${this.doc.regions.length} regions -> `
+			+ (hit ? `hit "${hit.name}" (${inner ? "inside" : `outline ${nearD.toFixed(0)} units`})` : "no hit");
 		return hit;
 	}
 
-	private lastHitInfo = "还没点过";
-	private lastTouchInfo = "还没碰过";
+	private lastHitInfo = "no tap yet";
+	private lastTouchInfo = "no touch yet";
 
 	private select(id: string | null, opts = false) {
 		if (this.selRegion === id && this.showOpts === opts) return;
@@ -1238,7 +1239,7 @@ export class HandwritingView extends TextFileView {
 		this.redrawAll();
 		this.rebuildOverlay();
 		this.requestSave();
-		new Notice(`已删除 ${gone.size} 条笔迹`);
+		new Notice(t("notice.strokesDeleted", gone.size));
 	}
 
 	/** Delete button, at the selection's top-right corner */
@@ -1249,7 +1250,7 @@ export class HandwritingView extends TextFileView {
 		bar.style.left = box.x + box.w + "px";
 		bar.style.top = box.y + "px";
 		this.counterScaled.push(bar);
-		const b = bar.createEl("button", { attr: { "aria-label": "删除圈中的笔迹", title: "删除圈中的笔迹", style: S.regionBtn } });
+		const b = bar.createEl("button", { attr: { "aria-label": t("sel.delete"), title: t("sel.delete"), style: S.regionBtn } });
 		drawIcon(b, "trash", 16);
 		b.addEventListener("pointerdown", (e) => e.stopPropagation());
 		b.addEventListener("click", (e) => { e.stopPropagation(); this.deleteSelection(); });
@@ -1286,7 +1287,7 @@ export class HandwritingView extends TextFileView {
 			this.redrawAll();
 			this.rebuildOverlay();
 			this.requestSave();
-			new Notice(`已创建区域「${region.name}」，可用 [[${this.linkBase()}#${region.name}]] 引用`);
+			new Notice(t("notice.regionCreated", region.name, this.linkBase()));
 		}, () => { this.redrawLive(); }).open();
 	}
 
@@ -1358,7 +1359,7 @@ export class HandwritingView extends TextFileView {
 		this.counterScaled.push(bar);
 
 		const name = bar.createDiv({
-			text: g.name || "(未命名)",
+			text: g.name || t("region.unnamed"),
 			attr: { style: sel ? S.regionNameOn : S.regionName },
 		});
 		// The tag and the ring are one thing: tap selects, long press opens options
@@ -1394,7 +1395,7 @@ export class HandwritingView extends TextFileView {
 			b.addEventListener("click", (e) => { e.stopPropagation(); cb(); });
 		};
 
-		btn("rename", "重命名", () => {
+		btn("rename", t("region.rename"), () => {
 			const taken = this.doc.regions.filter((r) => r.id !== g.id).map((r) => r.name);
 			new NameRegionModal(this.app, taken, (n) => {
 				g.name = sanitizeName(n);
@@ -1402,11 +1403,11 @@ export class HandwritingView extends TextFileView {
 				this.requestSave();
 			}, () => {}).open();
 		});
-		btn("copy", "复制 ![[...]] 引用", () => {
+		btn("copy", t("region.copyRef"), () => {
 			navigator.clipboard?.writeText(`![[${this.linkBase()}#${g.name}]]`);
-			new Notice("已复制引用");
+			new Notice(t("notice.refCopied"));
 		});
-		btn("trash", "删除区域", () => {
+		btn("trash", t("region.delete"), () => {
 			const i = this.doc.regions.findIndex((r) => r.id === g.id);
 			if (i < 0) return;
 			this.undoStack.push({ kind: "region-del", index: i, region: this.doc.regions[i] });
@@ -1416,14 +1417,14 @@ export class HandwritingView extends TextFileView {
 			this.redrawAll();
 			this.rebuildOverlay();
 			this.requestSave();
-			new Notice(`已删除区域「${g.name}」`);
+			new Notice(t("notice.regionDeleted", g.name));
 		});
 	}
 
 	private renderItem(it: LinkItem) {
 		if (!it.embed) {
 			const chip = this.overlay.createDiv({
-				text: it.target ? `[[${it.target}]]` : "[[空链接]]",
+				text: it.target ? `[[${it.target}]]` : t("link.empty"),
 				attr: { style: it.target ? S.chip : S.chipMissing },
 			});
 			chip.style.left = it.x + "px";
@@ -1438,7 +1439,7 @@ export class HandwritingView extends TextFileView {
 		boxEl.style.width = it.w + "px";
 
 		const bar = boxEl.createDiv({ attr: { style: S.embedBar } });
-		bar.createSpan({ text: `![[${it.target || "空链接"}]]` });
+		bar.createSpan({ text: `![[${it.target || "?"}]]` });
 		const body = boxEl.createDiv({ attr: { style: S.embedBody } });
 		this.wireItem(boxEl, bar, it);
 
@@ -1476,7 +1477,7 @@ export class HandwritingView extends TextFileView {
 
 	undo() {
 		const e = this.undoStack.pop();
-		if (!e) { new Notice("没有可撤销的操作"); return; }
+		if (!e) { new Notice(t("notice.nothingToUndo")); return; }
 		switch (e.kind) {
 			case "stroke-add": this.doc.strokes.splice(e.index, 1); break;
 			case "stroke-del": for (const it of [...e.items].reverse()) this.doc.strokes.splice(it.index, 0, it.stroke); break;
@@ -1510,35 +1511,43 @@ export class HandwritingView extends TextFileView {
 		const cs = (el: Element | null, prop: string) => (el ? getComputedStyle(el).getPropertyValue(prop) : "—");
 		const root = this.contentEl;
 		return {
-			"contentEl class": root.className || "(空)",
+			"contentEl class": root.className || "(empty)",
 			"root display / dir": cs(root, "display") + " / " + cs(root, "flex-direction"),
-			"root 尺寸": `${root.clientWidth} x ${root.clientHeight}`,
-			"tools 尺寸": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
-			"配置栏": this.ctxBar
-				? `${this.ctxBar.clientWidth} x ${this.ctxBar.clientHeight}，${this.ctxBar.childElementCount} 个子元素，工具=${this.tool}`
-				: "不存在",
-			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
-			"代码版本 / manifest": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
-			"笔宽档位 / 三档": `${this.sizeIdx} / [${this.sizes.join(", ")}]`,
-			"窄屏模式": String(this.narrow),
-			"上次点击判定": this.lastHitInfo,
-			"上次手指按下": this.lastTouchInfo,
-			"当前选中区域": this.selRegion
-				? (this.doc.regions.find((r) => r.id === this.selRegion)?.name ?? "?") : "无",
-			"页数 / 缩放": `${this.pages} 页 / ${(this.zoom * 100).toFixed(0)}%`,
-			"滚动位置": `${this.panY.toFixed(0)} / ${this.contentH()}`,
-			"低延迟画布": this.lowLatency ? "desynchronized 生效" : "常规合成",
-			"合并事件 API": typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "有" : "无",
-			"预测 API": typeof (PointerEvent.prototype as any).getPredictedEvents === "function" ? "有" : "无（自己外推）",
-			"事件频率": this.evtStamps.length > 5
+			"root size": `${root.clientWidth} x ${root.clientHeight}`,
+			"tool bar size": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
+			"context bar": this.ctxBar
+				? `${this.ctxBar.clientWidth} x ${this.ctxBar.clientHeight}, ${this.ctxBar.childElementCount} children, tool=${this.tool}`
+				: "absent",
+			"tool bar children": this.tools ? String(this.tools.childElementCount) : "—",
+			"bundle / manifest version": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
+			"width slot / widths": `${this.sizeIdx} / [${this.sizes.join(", ")}]`,
+			"narrow layout": String(this.narrow),
+			"last tap": this.lastHitInfo,
+			"last finger press": this.lastTouchInfo,
+			"selected region": this.selRegion
+				? (this.doc.regions.find((r) => r.id === this.selRegion)?.name ?? "?") : "none",
+			"pages / zoom": `${this.pages} / ${(this.zoom * 100).toFixed(0)}%`,
+			"scroll": `${this.panY.toFixed(0)} / ${this.contentH()}`,
+			"low-latency canvas": this.lowLatency ? "desynchronized active" : "normal compositing",
+			"coalesced events API": typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "yes" : "no",
+			"prediction API": typeof (PointerEvent.prototype as any).getPredictedEvents === "function" ? "yes" : "no (we extrapolate)",
+			"event rate": this.evtStamps.length > 5
 				? (1000 * (this.evtStamps.length - 1) /
 					(this.evtStamps[this.evtStamps.length - 1] - this.evtStamps[0])).toFixed(0) + " Hz"
-				: "先写一笔",
-			"笔迹 / 元素 / 区域": `${this.doc.strokes.length} / ${this.doc.items.length} / ${this.doc.regions.length}`,
+				: "draw a stroke first",
+			"strokes / items / regions": `${this.doc.strokes.length} / ${this.doc.items.length} / ${this.doc.regions.length}`,
 		};
 	}
 
 	refresh() { this.syncCtx?.(); this.resize(); }
+
+	/** Rebuild everything that carries a label, after the language changes */
+	relocalize() {
+		if (!this.tools) return;
+		this.buildToolbar(this.tools);
+		this.buildContextBar();
+		this.rebuildOverlay();
+	}
 }
 
 /** Drop a stroke's cached bounds. Moving a selection changes coordinates without

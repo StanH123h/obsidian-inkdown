@@ -123,14 +123,16 @@ export function serialize(doc: HwDoc): string {
 	const out: string[] = ["---", "handwriting: v1", "---", ""];
 	if (doc.title) out.push(`# ${doc.title}`, "");
 
+	// These section names stay in English rather than following the UI language,
+	// so a file means the same thing whoever opens it.
 	if (doc.regions.length) {
-		out.push("## 区域", "");
+		out.push("## Regions", "");
 		for (const r of doc.regions) if (r.name) out.push(`### ${r.name}`, "");
 	}
 
 	const links = doc.items.filter((i) => i.target.trim());
 	if (links.length) {
-		out.push("## 链接", "");
+		out.push("## Links", "");
 		for (const i of links) out.push(`- ${i.embed ? "!" : ""}[[${i.target}]]`);
 		out.push("");
 	}

@@ -2,8 +2,10 @@ import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, S
 import { HandwritingView, VIEW_TYPE } from "./view";
 import { emptyDoc, isHandwritingData, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
+import { Lang, detectLang, setLang, t } from "./i18n";
 
 export interface HandwritingSettings {
+	language: string;    // "auto", "en" or "zh"
 	sizes: number[];     // the three pen widths on the toolbar, in page units
 	eraserMode: string;  // "stroke" removes a whole stroke, "precise" only what it touches
 	eraserSize: number;  // eraser radius in page units
@@ -17,6 +19,7 @@ export interface HandwritingSettings {
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
+	language: "auto",
 	sizes: [4, 8, 14],
 	eraserMode: "stroke",
 	eraserSize: 14,
@@ -37,6 +40,7 @@ export default class HandwritingPlugin extends Plugin {
 
 	async onload() {
 		await this.loadSettings();
+		this.applyLang();
 
 		this.registerView(VIEW_TYPE, (leaf) => new HandwritingView(leaf, this));
 
@@ -64,13 +68,13 @@ export default class HandwritingPlugin extends Plugin {
 
 		this.addCommand({
 			id: "new-note",
-			name: "新建手写笔记",
+			name: t("cmd.newNote"),
 			callback: () => this.createNote(),
 		});
 
 		this.addCommand({
 			id: "toggle-source",
-			name: "手写视图 / Markdown 源码 切换",
+			name: t("cmd.toggleSource"),
 			checkCallback: (checking) => {
 				const leaf = this.app.workspace.getMostRecentLeaf();
 				if (!leaf) return false;
@@ -87,10 +91,10 @@ export default class HandwritingPlugin extends Plugin {
 
 		this.addCommand({
 			id: "migrate-hw-md",
-			name: "迁移：把 .hw.md 重命名为 .md",
+			name: t("cmd.migrate"),
 			callback: async () => {
 				const old = this.app.vault.getMarkdownFiles().filter((f) => f.path.endsWith(".hw.md"));
-				if (!old.length) { new Notice("没有 .hw.md 文件需要迁移"); return; }
+				if (!old.length) { new Notice(t("notice.nothingToMigrate")); return; }
 				let done = 0;
 				for (const f of old) {
 					// fileManager.renameFile also updates every link pointing at the file
@@ -98,17 +102,17 @@ export default class HandwritingPlugin extends Plugin {
 					if (this.app.vault.getAbstractFileByPath(to)) continue;   // skip name collisions
 					try { await this.app.fileManager.renameFile(f, to); done++; } catch (e) { /* skip */ }
 				}
-				new Notice(`已迁移 ${done} / ${old.length} 个文件`);
+				new Notice(t("notice.migrated", done, old.length));
 			},
 		});
 
 		this.addCommand({
 			id: "diagnostics",
-			name: "诊断信息（移动端排查用）",
+			name: t("cmd.diagnostics"),
 			callback: () => new DiagModal(this.app, this.collectDiagnostics()).open(),
 		});
 
-		this.addRibbonIcon("pen-tool", "新建手写笔记", () => this.createNote());
+		this.addRibbonIcon("pen-tool", t("cmd.newNote"), () => this.createNote());
 		this.addSettingTab(new HandwritingSettingTab(this.app, this));
 	}
 
@@ -119,15 +123,15 @@ export default class HandwritingPlugin extends Plugin {
 	/** No devtools on mobile, so the plugin has to report its own state */
 	collectDiagnostics(): Record<string, string> {
 		const out: Record<string, string> = {
-			"插件版本": this.manifest.version,
-			"平台": Platform.isMobile ? (Platform.isPhone ? "手机" : "平板") : "桌面",
-			"Obsidian": (this.app as unknown as { appId?: string }).appId ? "已加载" : "?",
-			"视口": `${window.innerWidth} x ${window.innerHeight} @${window.devicePixelRatio}x`,
-			"手写视图数": String(this.app.workspace.getLeavesOfType(VIEW_TYPE).length),
+			"plugin version": this.manifest.version,
+			"platform": Platform.isMobile ? (Platform.isPhone ? "phone" : "tablet") : "desktop",
+			"obsidian": (this.app as unknown as { appId?: string }).appId ? "loaded" : "?",
+			"viewport": `${window.innerWidth} x ${window.innerHeight} @${window.devicePixelRatio}x`,
+			"handwriting views": String(this.app.workspace.getLeavesOfType(VIEW_TYPE).length),
 		};
 		const leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
 		if (leaf) Object.assign(out, (leaf.view as HandwritingView).diagnostics());
-		else out["提示"] = "没有打开的手写笔记，先新建一个再运行本命令";
+		else out["hint"] = "no handwriting note open; create one, then run this again";
 		return out;
 	}
 
@@ -178,7 +182,7 @@ export default class HandwritingPlugin extends Plugin {
 		const folder = active?.parent?.path && active.parent.path !== "/" ? active.parent.path + "/" : "";
 		const d = new Date();
 		const pad = (n: number) => String(n).padStart(2, "0");
-		const title = `手写 ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`;
+		const title = `${t("view.newNotePrefix")} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`;
 		const path = `${folder}${title}.md`;
 
 		try {
@@ -187,11 +191,17 @@ export default class HandwritingPlugin extends Plugin {
 			await leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path } });
 			this.app.workspace.setActiveLeaf(leaf, { focus: true });
 		} catch (e) {
-			new Notice("新建失败：" + (e as Error).message);
+			new Notice(t("notice.createFailed", (e as Error).message));
 		}
 	}
 
 	/* ============ Settings ============ */
+
+	/** "auto" follows Obsidian's display language; anything not Chinese gets English */
+	applyLang() {
+		const l = this.settings.language;
+		setLang(l === "en" || l === "zh" ? (l as Lang) : detectLang());
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -205,6 +215,12 @@ export default class HandwritingPlugin extends Plugin {
 			const v = Number(saved[i]);
 			return Number.isFinite(v) && v >= 1 && v <= 28 ? v : d;
 		});
+	}
+
+	relocalizeViews() {
+		for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+			(leaf.view as HandwritingView).relocalize();
+		}
 	}
 
 	async saveSettings() {
@@ -223,33 +239,49 @@ class HandwritingSettingTab extends PluginSettingTab {
 		containerEl.empty();
 
 		new Setting(containerEl)
-			.setName("起收笔锋")
-			.setDesc("关：粗细完全由真实压力决定。轻微：额外加 3px 的过渡，起笔边缘更柔和。")
+			.setName(t("set.language"))
+			.setDesc(t("set.languageDesc"))
 			.addDropdown((d) => d
-				.addOption("0", "关")
-				.addOption("1", "轻微")
+				.addOption("auto", t("set.langAuto"))
+				.addOption("en", "English")
+				.addOption("zh", "中文")
+				.setValue(this.plugin.settings.language)
+				.onChange(async (v) => {
+					this.plugin.settings.language = v;
+					this.plugin.applyLang();
+					await this.plugin.saveSettings();
+					this.plugin.relocalizeViews();
+					this.display();   // redraw this tab in the new language
+				}));
+
+		new Setting(containerEl)
+			.setName(t("set.taper"))
+			.setDesc(t("set.taperDesc"))
+			.addDropdown((d) => d
+				.addOption("0", t("set.off"))
+				.addOption("1", t("set.subtle"))
 				.setValue(String(this.plugin.settings.taper))
 				.onChange(async (v) => { this.plugin.settings.taper = Number(v); await this.plugin.saveSettings(); }));
 
 		new Setting(containerEl)
-			.setName("低延迟画布")
-			.setDesc("desynchronized 提示。关掉走常规合成路径 —— 如果裂纹只在写字那一层出现，关掉它能排除是这个引起的。")
+			.setName(t("set.lowLatency"))
+			.setDesc(t("set.lowLatencyDesc"))
 			.addToggle((t) => t
 				.setValue(this.plugin.settings.lowLatency)
 				.onChange(async (v) => { this.plugin.settings.lowLatency = v; await this.plugin.saveSettings(); }));
 
 		new Setting(containerEl)
-			.setName("平滑算法")
-			.setDesc("1€ 滤波：慢写时压抖动、快写时放开跟手，同样的平滑度下延迟更小（CHI 2012 的做法）。指数平滑是固定强度，只能在抖和拖之间二选一。")
+			.setName(t("set.renderer"))
+			.setDesc(t("set.rendererDesc"))
 			.addDropdown((d) => d
-				.addOption("1", "1€ 滤波（推荐）")
-				.addOption("0", "指数平滑（旧）")
+				.addOption("1", t("set.oneEuro"))
+				.addOption("0", t("set.exponential"))
 				.setValue(String(this.plugin.settings.filter))
 				.onChange(async (v) => { this.plugin.settings.filter = Number(v); await this.plugin.saveSettings(); }));
 
 		new Setting(containerEl)
-			.setName("笔尖预测")
-			.setDesc("往笔尖前方多画几帧，抵消感知延迟 —— Notability 这类原生应用靠系统的 predictedTouches 做这件事，WebKit 没有这个 API，只能自己外推。调大更跟手，但转弯时可能轻微过冲。")
+			.setName(t("set.predict"))
+			.setDesc(t("set.predictDesc"))
 			.addSlider((s2) => s2
 				.setLimits(0, 4, 1)
 				.setValue(this.plugin.settings.predict)
@@ -257,8 +289,8 @@ class HandwritingSettingTab extends PluginSettingTab {
 				.onChange(async (v) => { this.plugin.settings.predict = v; await this.plugin.saveSettings(); }));
 
 		new Setting(containerEl)
-			.setName("平滑强度")
-			.setDesc("越高越顺滑，但跟手感会变差。")
+			.setName(t("set.smooth"))
+			.setDesc(t("set.smoothDesc"))
 			.addSlider((s) => s
 				.setLimits(0, 0.9, 0.05)
 				.setValue(this.plugin.settings.smooth)
@@ -266,8 +298,8 @@ class HandwritingSettingTab extends PluginSettingTab {
 				.onChange(async (v) => { this.plugin.settings.smooth = v; await this.plugin.saveSettings(); }));
 
 		new Setting(containerEl)
-			.setName("压感强度")
-			.setDesc("0 = 恒定粗细，1 = 粗细完全跟着压力走。")
+			.setName(t("set.thin"))
+			.setDesc(t("set.thinDesc"))
 			.addSlider((s) => s
 				.setLimits(0, 1, 0.05)
 				.setValue(this.plugin.settings.thin)
@@ -275,8 +307,8 @@ class HandwritingSettingTab extends PluginSettingTab {
 				.onChange(async (v) => { this.plugin.settings.thin = v; await this.plugin.saveSettings(); }));
 
 		new Setting(containerEl)
-			.setName("允许手指绘制")
-			.setDesc("关闭时只认 Apple Pencil 和鼠标，手掌搭在屏幕上不会画出杂线。")
+			.setName(t("set.finger"))
+			.setDesc(t("set.fingerDesc"))
 			.addToggle((t) => t
 				.setValue(this.plugin.settings.allowFinger)
 				.onChange(async (v) => { this.plugin.settings.allowFinger = v; await this.plugin.saveSettings(); }));
@@ -287,7 +319,7 @@ class DiagModal extends Modal {
 	constructor(app: App, private data: Record<string, string>) { super(app); }
 
 	onOpen() {
-		this.titleEl.setText("Handwriting 诊断");
+		this.titleEl.setText("Handwriting diagnostics");
 		const box = this.contentEl.createDiv({
 			attr: { style: "font-size:13px;line-height:1.7;-webkit-user-select:text;user-select:text;" },
 		});

@@ -1,11 +1,11 @@
 {
   "name": "obsidian-handwriting",
-  "version": "0.12.10",
+  "version": "0.13.0",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
-    "test": "esbuild src/ink.ts --bundle --format=cjs --outfile=.test-build/ink.cjs --log-level=error && node test/region-hit.test.js && node test/region-embed.test.js"
+    "test": "esbuild src/ink.ts --bundle --format=cjs --outfile=.test-build/ink.cjs --log-level=error && node test/region-hit.test.js && node test/region-embed.test.js && node test/i18n.test.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

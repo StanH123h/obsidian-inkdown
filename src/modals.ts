@@ -1,5 +1,6 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { isHandwritingFile, parse, sanitizeName } from "./format";
+import { t } from "./i18n";
 
 /* ============ Naming a region ============ */
 
@@ -14,33 +15,33 @@ export class NameRegionModal extends Modal {
 	) { super(app); }
 
 	onOpen() {
-		this.titleEl.setText("给这块内容命名");
+		this.titleEl.setText(t("name.title"));
 		this.contentEl.createEl("p", {
-			text: "命名后就能在别处用 [[本文件#名字]] 引用它，加 ! 会直接显示这块手写内容。",
+			text: t("name.desc"),
 			attr: { style: "font-size:13px;opacity:.7;margin:0 0 12px;" },
 		});
 
 		let input: HTMLInputElement;
-		new Setting(this.contentEl).setName("名字").addText((t) => {
-			input = t.inputEl;
-			t.setPlaceholder("例如：反应机理图").onChange((v) => (this.value = v));
-			t.inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") this.submit(); });
+		new Setting(this.contentEl).setName(t("name.field")).addText((txt) => {
+			input = txt.inputEl;
+			txt.setPlaceholder(t("name.placeholder")).onChange((v: string) => (this.value = v));
+			txt.inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") this.submit(); });
 		});
 		setTimeout(() => input?.focus(), 30);
 
 		new Setting(this.contentEl)
-			.addButton((b) => b.setButtonText("取消").onClick(() => { this.cancelled = true; this.close(); }))
-			.addButton((b) => b.setCta().setButtonText("确定").onClick(() => this.submit()));
+			.addButton((b) => b.setButtonText(t("common.cancel")).onClick(() => { this.cancelled = true; this.close(); }))
+			.addButton((b) => b.setCta().setButtonText(t("common.ok")).onClick(() => this.submit()));
 	}
 
 	private cancelled = false;
 
 	private submit() {
 		const name = sanitizeName(this.value);
-		if (!name) { new Notice("名字不能为空"); return; }
+		if (!name) { new Notice(t("notice.nameEmpty")); return; }
 		// Obsidian resolves duplicate headings as "first one wins, the rest fail
 		// silently", which is far too easy to miss, so reject duplicates outright
-		if (this.taken.includes(name)) { new Notice(`已经有一个区域叫「${name}」了`); return; }
+		if (this.taken.includes(name)) { new Notice(t("notice.nameTaken", name)); return; }
 		this.cancelled = false;
 		this.onDone(name);
 		this.close();
@@ -73,21 +74,21 @@ export class LinkModal extends Modal {
 	}
 
 	onOpen() {
-		this.titleEl.setText("Wiki 链接（只能指向手写内容）");
+		this.titleEl.setText(t("link.title"));
 
 		let input: HTMLInputElement;
-		new Setting(this.contentEl).setName("目标").addText((t) => {
-			input = t.inputEl;
-			t.setPlaceholder("手写笔记名，或 手写笔记名#区域").setValue(this.target)
+		new Setting(this.contentEl).setName(t("link.target")).addText((txt) => {
+			input = txt.inputEl;
+			txt.setPlaceholder(t("link.placeholder")).setValue(this.target)
 				.onChange((v) => { this.target = v; this.refresh(); });
-			t.inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") this.submit(); });
-			t.inputEl.style.width = "100%";
+			txt.inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") this.submit(); });
+			txt.inputEl.style.width = "100%";
 		});
 
 		new Setting(this.contentEl)
-			.setName("直接显示内容")
-			.setDesc("相当于 ![[ ]]：直接把目标手写笔记（或它的某个圈）画在这里。")
-			.addToggle((t) => t.setValue(this.embed).onChange((v) => (this.embed = v)));
+			.setName(t("link.embed"))
+			.setDesc(t("link.embedDesc"))
+			.addToggle((tg) => tg.setValue(this.embed).onChange((v) => (this.embed = v)));
 
 		this.listEl = this.contentEl.createDiv({
 			attr: { style: "max-height:240px;overflow:auto;margin:8px 0 12px;" },
@@ -95,8 +96,8 @@ export class LinkModal extends Modal {
 		this.refresh();
 
 		new Setting(this.contentEl)
-			.addButton((b) => b.setWarning().setButtonText("删除").onClick(() => { this.onDelete(); this.close(); }))
-			.addButton((b) => b.setCta().setButtonText("确定").onClick(() => this.submit()));
+			.addButton((b) => b.setWarning().setButtonText(t("common.delete")).onClick(() => { this.onDelete(); this.close(); }))
+			.addButton((b) => b.setCta().setButtonText(t("common.ok")).onClick(() => this.submit()));
 
 		setTimeout(() => { input?.focus(); input?.select(); }, 30);
 	}
@@ -128,7 +129,7 @@ export class LinkModal extends Modal {
 					this.listEl.empty();
 					for (const r of parse(data).regions) {
 						if (!r.name.toLowerCase().includes(needle)) continue;
-						row(r.name, "区域", () => { this.target = `${base}#${r.name}`; this.close2(); });
+						row(r.name, t("link.area"), () => { this.target = `${base}#${r.name}`; this.close2(); });
 					}
 				});
 				return;
@@ -144,7 +145,7 @@ export class LinkModal extends Modal {
 			.slice(0, 12);
 		if (!files.length) {
 			this.listEl.createDiv({
-				text: needle ? "没有匹配的手写笔记" : "还没有别的手写笔记",
+				text: needle ? t("link.noMatch") : t("link.noneYet"),
 				attr: { style: "padding:8px 10px;font-size:12px;opacity:.55;" },
 			});
 			return;
