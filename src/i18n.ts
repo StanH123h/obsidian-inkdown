@@ -38,6 +38,7 @@ const STR = {
 	/* notices */
 	"notice.nothingToUndo": ["Nothing to undo", "没有可撤销的操作"],
 	"notice.createFailed": ["Could not create the note: {0}", "新建失败：{0}"],
+	"notice.created": ["Created in {0}", "已创建于 {0}"],
 	"notice.nothingToMigrate": ["No .hw.md files to migrate", "没有 .hw.md 文件需要迁移"],
 	"notice.migrated": ["Migrated {0} of {1} files", "已迁移 {0} / {1} 个文件"],
 	"notice.regionCreated": ["Area \"{0}\" created; reference it with [[{1}#{0}]]", "已创建区域「{0}」，可用 [[{1}#{0}]] 引用"],

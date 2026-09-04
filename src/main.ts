@@ -178,18 +178,30 @@ export default class HandwritingPlugin extends Plugin {
 	/* ============ Creating notes ============ */
 
 	private async createNote() {
+		// Obsidian already asks where new notes go, under Files and links ->
+		// "Default location for new notes". Following that setting means the
+		// answer to "where did this end up" is one the user has already given,
+		// and is visible in a place they can change.
 		const active = this.app.workspace.getActiveFile();
-		const folder = active?.parent?.path && active.parent.path !== "/" ? active.parent.path + "/" : "";
+		const parent = this.app.fileManager.getNewFileParent(active?.path ?? "");
+		const dir = parent.isRoot() ? "" : parent.path + "/";
+
 		const d = new Date();
 		const pad = (n: number) => String(n).padStart(2, "0");
 		const title = `${t("view.newNotePrefix")} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}${pad(d.getMinutes())}`;
-		const path = `${folder}${title}.md`;
+
+		// Two notes made inside the same minute would collide, and vault.create
+		// throws rather than picking another name
+		let path = `${dir}${title}.md`;
+		for (let n = 2; this.app.vault.getAbstractFileByPath(path); n++)
+			path = `${dir}${title} ${n}.md`;
 
 		try {
 			const file = await this.app.vault.create(path, emptyDoc(title));
 			const leaf = this.app.workspace.getLeaf(true);
 			await leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path } });
 			this.app.workspace.setActiveLeaf(leaf, { focus: true });
+			new Notice(t("notice.created", parent.isRoot() ? "/" : parent.path));
 		} catch (e) {
 			new Notice(t("notice.createFailed", (e as Error).message));
 		}
