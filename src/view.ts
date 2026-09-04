@@ -1,7 +1,7 @@
 import { Component, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	drawStroke, hitStroke, pathToCanvas, pointInPoly, polyBounds, predictTip, strokeInRegion,
+	distToPoly, drawStroke, hitStroke, pathToCanvas, pointInPoly, polyBounds, predictTip, strokeInRegion,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -65,6 +65,7 @@ export class HandwritingView extends TextFileView {
 	/** 轻点判定：按下时记录，移动超过阈值就作废（那是笔画或平移，不是点击） */
 	private tap: { x: number; y: number; finger: boolean } | null = null;
 	private lpTimer = 0;
+	private panMoved = false;
 
 	/* 视口：缩放 + 平移。笔迹坐标始终是内容单位，跟屏幕无关。 */
 	private zoom = 1;
@@ -448,6 +449,7 @@ export class HandwritingView extends TextFileView {
 				if (!this.plugin.settings.allowFinger) {
 					this.panFrom = { x: e.clientX, y: e.clientY };
 					this.velSamples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
+					this.panMoved = false;
 					// 手指不画画，所以轻点和长按都能安全地拿来操作区域
 					this.tap = { x: e.clientX, y: e.clientY, finger: true };
 					const p = this.toPage(e);
@@ -493,7 +495,7 @@ export class HandwritingView extends TextFileView {
 		});
 
 		this.registerDomEvent(el, "pointermove", (e: PointerEvent) => {
-			if (this.tap && Math.hypot(e.clientX - this.tap.x, e.clientY - this.tap.y) > (this.tap.finger ? 9 : 5)) {
+			if (this.tap && Math.hypot(e.clientX - this.tap.x, e.clientY - this.tap.y) > (this.tap.finger ? 16 : 6)) {
 				this.tap = null;
 				this.clearLongPress();
 			}
@@ -501,6 +503,11 @@ export class HandwritingView extends TextFileView {
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				if (this.touches.size >= 2) { this.handlePinch(); return; }
 				if (this.panFrom) {
+					// 死区：没超过这点距离就不当平移，否则手指微抖会把画面挪走
+					if (!this.panMoved) {
+						if (Math.hypot(e.clientX - this.panFrom.x, e.clientY - this.panFrom.y) < 4) return;
+						this.panMoved = true;
+					}
 					this.panX -= (e.clientX - this.panFrom.x) / this.scale;
 					this.panY -= (e.clientY - this.panFrom.y) / this.scale;
 					this.panFrom = { x: e.clientX, y: e.clientY };
@@ -628,14 +635,24 @@ export class HandwritingView extends TextFileView {
 		});
 	}
 
-	private regionAt(x: number, y: number): Region | null {
-		// 后画的在上层，从后往前找
-		for (let i = this.doc.regions.length - 1; i >= 0; i--) {
-			const g = this.doc.regions[i];
-			if (g.path.length > 2 && pointInPoly(g.path, x, y)) return g;
+	/** 命中判定：落在圈内，或离圈的轮廓够近，都算点中了。
+	 *  只认"正好戳在细虚线上"太苛刻，手指根本点不准。 */
+	private regionAt(x: number, y: number, tol = 16): Region | null {
+		this.lastHitInfo = `(${x.toFixed(0)},${y.toFixed(0)}) 共 ${this.doc.regions.length} 个区域`;
+		let best: Region | null = null, bestD = Infinity;
+		for (const g of this.doc.regions) {
+			if (g.path.length < 3) continue;
+			const inside = pointInPoly(g.path, x, y);
+			const d = distToPoly(g.path, x, y);
+			if (!inside && d > tol) continue;
+			// 同时命中多个时取轮廓最近的那个
+			const score = inside ? -1 : d;
+			if (score < bestD) { bestD = score; best = g; }
 		}
-		return null;
+		this.lastHitInfo += best ? ` -> 命中「${best.name}」` : " -> 未命中";
+		return best;
 	}
+	private lastHitInfo = "还没点过";
 
 	private select(id: string | null, opts = false) {
 		if (this.selRegion === id && this.showOpts === opts) return;
@@ -1037,6 +1054,9 @@ export class HandwritingView extends TextFileView {
 			"tools 尺寸": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
 			"tools 子元素": this.tools ? String(this.tools.childElementCount) : "—",
 			"窄屏模式": String(this.narrow),
+			"上次点击判定": this.lastHitInfo,
+			"当前选中区域": this.selRegion
+				? (this.doc.regions.find((r) => r.id === this.selRegion)?.name ?? "?") : "无",
 			"页数 / 缩放": `${this.pages} 页 / ${(this.zoom * 100).toFixed(0)}%`,
 			"滚动位置": `${this.panY.toFixed(0)} / ${this.contentH()}`,
 			"低延迟画布": this.lowLatency ? "desynchronized 生效" : "常规合成",

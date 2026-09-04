@@ -219,6 +219,22 @@ export function pointInPoly(path: [number, number][], px: number, py: number): b
 	return inside;
 }
 
+/** 点到多边形边界的最短距离。判定"点在圈上"时给一点容差 —— 
+ *  要求正好戳在细虚线上太苛刻了。 */
+export function distToPoly(path: [number, number][], px: number, py: number): number {
+	let best = Infinity;
+	for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+		const [x1, y1] = path[j], [x2, y2] = path[i];
+		const dx = x2 - x1, dy = y2 - y1;
+		const L2 = dx * dx + dy * dy;
+		let t = L2 > 0 ? ((px - x1) * dx + (py - y1) * dy) / L2 : 0;
+		t = Math.max(0, Math.min(1, t));
+		const d = Math.hypot(px - (x1 + dx * t), py - (y1 + dy * t));
+		if (d < best) best = d;
+	}
+	return best;
+}
+
 /** 笔迹是否与区域相交 —— 只要有采样点落在多边形里就算 */
 export function strokeInRegion(stroke: Stroke, region: Region): boolean {
 	for (const p of stroke.pts) if (pointInPoly(region.path, p.x, p.y)) return true;
