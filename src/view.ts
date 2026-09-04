@@ -662,18 +662,10 @@ export class HandwritingView extends TextFileView {
 			drawStroke(this.lctx, s, this.opts(), false);
 		}
 		if (this.lasso && this.lasso.length > 1) this.drawRegionOutline(this.lctx, this.lasso, "drawing");
-		if (this.sel) {
-			const cx = this.lctx;
-			cx.save();
-			cx.setLineDash([8 / this.scale, 5 / this.scale]);
-			cx.lineWidth = 2 / this.scale;
-			cx.strokeStyle = "rgba(60,60,60,.85)";
-			cx.fillStyle = "rgba(120,120,120,.10)";
-			pathToCanvas(cx, this.sel.path);
-			cx.fill();
-			cx.stroke();
-			cx.restore();
-		}
+		// A freshly drawn lasso is by definition selected, so it uses the same
+		// "selected" look as a Wiki region rather than a style of its own. Drawing
+		// it grey read as "not selected", which is the opposite of the truth.
+		if (this.sel) this.drawRegionOutline(this.lctx, this.sel.path, "selected");
 		// Eraser preview: how big the eraser is and where it currently sits
 		if (this.tool === "eraser" && this.eraserAt) {
 			const cx = this.lctx, r = this.plugin.settings.eraserSize;
