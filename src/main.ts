@@ -44,7 +44,7 @@ export default class HandwritingPlugin extends Plugin {
 			})),
 		);
 
-		// .hw.md 本身是普通 markdown，所以 Obsidian 会用 MarkdownView 打开它。
+		// 手写笔记本身是普通 markdown，所以 Obsidian 会用 MarkdownView 打开它。
 		// 这里在布局变化后把它换成手写视图。
 		// 这是整套方案里唯一一处依赖非公开行为的地方（Excalidraw 也是这么做的）。
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.claimLeaves()));
