@@ -19,9 +19,16 @@ export interface InkOpts {
 	filter: number;   // 0 = exponential smoothing, 1 = one-euro filter
 }
 
-/** Nominal sample rate. Saved ink carries no timestamps, so a fixed value keeps
- *  rendering reproducible. */
-const RATE = 120;
+/* How far the smoothing filter remembers, in page units.
+ *
+ * Swept against digitiser noise and circle-radius loss: the knee sits just under
+ * 1. At L = 1 noise drops by about 60% and a 4-unit circle loses 4% of its
+ * radius; past that, noise reduction flattens out while the shrinkage keeps
+ * climbing -- L = 2.85 buys another 6% of noise for 16% of the radius. The old
+ * per-sample filter sat around an effective L of 2, well past the knee, which is
+ * why tight curves visibly shrank. */
+const SMOOTH_MIN_L = 0.15;
+const SMOOTH_L_RANGE = 1.55;
 
 const TAPER_PX = [0, 3];
 const TAU = Math.PI * 2;
@@ -46,7 +53,7 @@ export function build(stroke: Stroke, opt: InkOpts, done: boolean): RPt[] {
 	const pTail = clean[tail] ? clean[tail].p : pHead;
 
 	const k = 1 - opt.smooth;
-	const smooth = opt.filter === 1 ? oneEuro(clean, opt.smooth) : null;
+	const smooth = opt.filter === 1 ? spatialSmooth(clean, opt.smooth) : null;
 	const out: (RPt & { p: number; d: number })[] = [];
 	let prev: (RPt & { p: number; d: number }) | null = null;
 	let dist = 0;
@@ -348,40 +355,30 @@ export function paintInk(
 }
 
 
-/* ============ One-euro filter (Casiez et al., CHI 2012) ============
- * Fixed-strength smoothing forces a choice between jitter and lag. The one-euro
- * insight is that people notice jitter but not latency when moving slowly, and
- * the reverse when moving fast. So the cutoff frequency follows speed: clamp
- * hard when slow (no jitter), open up when fast (no lag). For the same amount
- * of jitter suppression the lag is far lower than a fixed low-pass. */
-function oneEuro(pts: Pt[], smooth: number): [number, number][] {
-	const te = 1 / RATE;
-	const alphaOf = (cutoff: number) => {
-		const tau = 1 / (2 * Math.PI * cutoff);
-		return 1 / (1 + tau / te);
-	};
-	// The smooth slider maps to the minimum cutoff: smoother means a lower cutoff,
-	// which clamps harder at low speed
-	const minCutoff = 0.6 + (1 - smooth) * 7;
-	const beta = 0.05;   // speed coefficient. From a parameter sweep: less jitter
-	                     // than exponential smoothing when slow, 73% less lag when fast
-	const aD = alphaOf(1);   // the derivative needs its own low-pass, or the speed
-	                         // estimate itself jitters
-
+/* ============ Smoothing ============
+ *
+ * The filter works per unit of distance travelled, not per sample. That is the
+ * whole point: a stroke thinned to half its samples then smoothed comes out the
+ * same shape as one smoothed at full density. The previous filter stepped once
+ * per sample and assumed a fixed 120Hz, so thinning a stroke before smoothing it
+ * made the filter cut corners roughly twice as hard -- a small circle lost 11% of
+ * its radius instead of 6%, which is what "my handwriting keeps getting altered"
+ * turned out to be.
+ *
+ * L is how far the filter remembers, in page units. Everything else follows from
+ * it: over a stretch of path of length L the output catches up to within 1/e of
+ * the input, whether that stretch holds three samples or thirty. */
+function spatialSmooth(pts: Pt[], smooth: number): [number, number][] {
+	const L = SMOOTH_MIN_L + smooth * SMOOTH_L_RANGE;
 	const out: [number, number][] = [];
 	if (!pts.length) return out;
-	let fx = pts[0].x, fy = pts[0].y, px = fx, py = fy, edx = 0, edy = 0;
+	let fx = pts[0].x, fy = pts[0].y;
 	out.push([fx, fy]);
-
 	for (let i = 1; i < pts.length; i++) {
-		const { x, y } = pts[i];
-		const dx = (x - px) * RATE, dy = (y - py) * RATE;
-		edx += aD * (dx - edx);
-		edy += aD * (dy - edy);
-		const a = alphaOf(minCutoff + beta * Math.hypot(edx, edy));
-		fx += a * (x - fx);
-		fy += a * (y - fy);
-		px = x; py = y;
+		const ds = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+		const a = ds / (L + ds);
+		fx += a * (pts[i].x - fx);
+		fy += a * (pts[i].y - fy);
 		out.push([fx, fy]);
 	}
 	return out;
@@ -421,15 +418,26 @@ export function predictTip(pts: Pt[], frames: number): Pt[] {
 	return out;
 }
 
-/** Thin out samples: coalesced events produce very dense points, so drop any
- * closer than 0.6 page units to the previous one. No visible difference, much
- * less data -- in memory as well as on disk. */
+/** Thin out samples. Coalesced events produce very dense points, so drop any
+ *  closer than MIN to the previous kept one -- except through a turn, where the
+ *  threshold drops to TURN_MIN. cleanRaw already had that protection and this did
+ *  not, which is why corners were the first thing to go: they are exactly where
+ *  the pen slows down and the samples bunch up. */
 export function decimate(pts: Pt[]): Pt[] {
+	// TURN_MIN matches cleanRaw's corner threshold: keeping points closer than
+	// that would be pointless, since cleanRaw discards them again at render time.
+	const MIN = 0.6, TURN_MIN = 0.35, TURN = 0.97;
 	if (pts.length < 3) return pts;
 	const out = [pts[0]];
+	let dirX = 0, dirY = 0;
 	for (let i = 1; i < pts.length - 1; i++) {
 		const last = out[out.length - 1];
-		if (Math.hypot(pts[i].x - last.x, pts[i].y - last.y) >= 0.6) out.push(pts[i]);
+		const sx = pts[i].x - last.x, sy = pts[i].y - last.y;
+		const step = Math.hypot(sx, sy);
+		const straight = step > 0 && (dirX || dirY) ? (sx * dirX + sy * dirY) / step : 1;
+		if (step < (straight < TURN ? TURN_MIN : MIN)) continue;
+		if (step > 0) { dirX = sx / step; dirY = sy / step; }
+		out.push(pts[i]);
 	}
 	out.push(pts[pts.length - 1]);
 	return out;
