@@ -75,6 +75,24 @@ export const S = {
 		"font-size:16px;background:var(--background-secondary,rgba(127,127,127,.08));" +
 		`color:${MUTED};touch-action:none;`,
 	embedBody: "padding:10px 13px;font-size:18px;",
+	// 区域的浮动条。定位用内容单位，但自身做反向缩放，
+	// 这样放大画布时按钮不会跟着变成巨无霸。
+	regionBar:
+		"position:absolute;display:flex;align-items:center;gap:2px;pointer-events:auto;" +
+		"transform-origin:0 0;white-space:nowrap;border-radius:9px;padding:2px;" +
+		`background:${"var(--background-primary, #fff)"};box-shadow:0 1px 6px rgba(0,0,0,.18);` +
+		`border:1px solid ${BORDER};touch-action:none;`,
+	regionName:
+		"padding:3px 9px;border-radius:7px;font-size:12px;line-height:1.5;cursor:pointer;" +
+		`color:${MUTED};`,
+	regionNameOn:
+		"padding:3px 9px;border-radius:7px;font-size:12px;line-height:1.5;cursor:pointer;" +
+		"color:var(--text-on-accent,#fff);background:var(--interactive-accent,#5b6ed6);",
+	regionBtn:
+		"display:flex;align-items:center;justify-content:center;width:26px;height:26px;" +
+		"padding:0;margin:0;border:0;border-radius:7px;background:transparent;cursor:pointer;" +
+		`color:${MUTED};`,
+
 	regionTag:
 		"position:absolute;pointer-events:auto;cursor:pointer;transform:translateY(-100%);" +
 		"padding:2px 9px;border-radius:8px 8px 8px 0;font-size:15px;line-height:1.6;" +
@@ -112,6 +130,9 @@ export const ICONS = {
 		"M10.2 13.8a4.5 4.5 0 0 0 6.7.5l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4l-1.5 1.5",
 		"M13.8 10.2a4.5 4.5 0 0 0-6.7-.5l-2.7 2.7a4.5 4.5 0 0 0 6.4 6.4l1.5-1.5",
 	],
+	trash: ["M4 7h16", "M9 7V5h6v2", "M7 7l1 13h8l1-13"],
+	rename: ["M4 20l4-1 9.5-9.5-3-3L5 16z", "M14.5 6.5l3 3"],
+	copy: ["M9 9h9v11H9z", "M6 15H4V4h11v2"],
 	fit: ["M4 9V5h4", "M20 9V5h-4", "M4 15v4h4", "M20 15v4h-4"],
 	undo: ["M4 10h10.5a4.5 4.5 0 0 1 0 9H9", "M4 10l4-4", "M4 10l4 4"],
 	code: ["M9 8l-4 4 4 4", "M15 8l4 4-4 4"],

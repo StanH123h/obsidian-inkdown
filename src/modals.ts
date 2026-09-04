@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Setting, TFile } from "obsidian";
+import { App, Modal, Notice, Setting } from "obsidian";
 import { isHandwritingPath, parse, sanitizeName } from "./format";
 
 /* ================= 给区域命名 ================= */

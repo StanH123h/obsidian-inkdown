@@ -1,7 +1,7 @@
-import { Component, Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
+import { Component, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import {
 	InkOpts, PAGE_H, PAGE_W, Region, Stroke,
-	drawStroke, hitStroke, pathToCanvas, polyBounds, predictTip,
+	drawStroke, hitStroke, pathToCanvas, pointInPoly, polyBounds, predictTip, strokeInRegion,
 } from "./ink";
 import { HwDoc, LinkItem, newId, parse, sanitizeName, serialize } from "./format";
 import { renderResolved, resolveTarget } from "./embed";
@@ -24,7 +24,8 @@ type UndoEntry =
 	| { kind: "item-add"; id: string }
 	| { kind: "item-del"; index: number; item: LinkItem }
 	| { kind: "region-add"; id: string }
-	| { kind: "region-del"; index: number; region: Region };
+	| { kind: "region-del"; index: number; region: Region }
+	| { kind: "region-move"; id: string; dx: number; dy: number; strokes: number[] };
 
 export class HandwritingView extends TextFileView {
 	private plugin: HandwritingPlugin;
@@ -45,7 +46,6 @@ export class HandwritingView extends TextFileView {
 	private cur: Stroke | null = null;
 	private lasso: [number, number][] | null = null;
 	private drawing = false;
-	private frameQueued = false;
 	private lastT = -1;
 	private lowLatency = false;
 	private evtStamps: number[] = [];
@@ -54,6 +54,12 @@ export class HandwritingView extends TextFileView {
 	private color = COLORS[0];
 	private size = SIZES[1];
 	private undoStack: UndoEntry[] = [];
+
+	/** 当前选中的区域 id。选中后才能拖动，点空白处取消。 */
+	private selRegion: string | null = null;
+	private regionDrag: { id: string; ox: number; oy: number; dx: number; dy: number; moved: boolean } | null = null;
+	/** 需要做反向缩放的浮动 UI（放大画布时按钮不该跟着变大） */
+	private counterScaled: HTMLElement[] = [];
 
 	/* 视口：缩放 + 平移。笔迹坐标始终是内容单位，跟屏幕无关。 */
 	private zoom = 1;
@@ -317,7 +323,8 @@ export class HandwritingView extends TextFileView {
 			if (b.y1 < top || b.y0 > bot) continue;
 			drawStroke(cx, st, this.opts(), true);
 		}
-		for (const g of this.doc.regions) this.drawRegionOutline(cx, g.path, false);
+		for (const g of this.doc.regions)
+			this.drawRegionOutline(cx, g.path, g.id === this.selRegion ? "selected" : "idle");
 		this.redrawLive();
 	}
 
@@ -373,15 +380,23 @@ export class HandwritingView extends TextFileView {
 		cx.restore();
 	}
 
-	private drawRegionOutline(cx: CanvasRenderingContext2D, path: [number, number][], active: boolean) {
+	private drawRegionOutline(
+		cx: CanvasRenderingContext2D,
+		path: [number, number][],
+		mode: "idle" | "drawing" | "selected",
+	) {
 		if (path.length < 2) return;
 		cx.save();
-		cx.setLineDash([7 / this.scale, 6 / this.scale]);
-		cx.lineWidth = 2 / this.scale;
-		cx.strokeStyle = active ? "rgba(91,110,214,.95)" : "rgba(91,110,214,.45)";
+		const sel = mode === "selected";
+		cx.setLineDash(mode === "drawing" ? [] : [sel ? 9 / this.scale : 7 / this.scale, 6 / this.scale]);
+		cx.lineWidth = (sel ? 3 : 2) / this.scale;
+		cx.strokeStyle = mode === "idle" ? "rgba(91,110,214,.4)" : "rgba(91,110,214,.95)";
 		pathToCanvas(cx, path);
+		if (mode !== "drawing") {
+			cx.fillStyle = sel ? "rgba(91,110,214,.14)" : "rgba(91,110,214,.05)";
+			cx.fill();
+		}
 		cx.stroke();
-		if (!active) { cx.fillStyle = "rgba(91,110,214,.05)"; cx.fill(); }
 		cx.restore();
 	}
 
@@ -396,7 +411,7 @@ export class HandwritingView extends TextFileView {
 			const s = ahead.length ? { ...this.cur, pts: this.cur.pts.concat(ahead) } : this.cur;
 			drawStroke(this.lctx, s, this.opts(), false);
 		}
-		if (this.lasso && this.lasso.length > 1) this.drawRegionOutline(this.lctx, this.lasso, true);
+		if (this.lasso && this.lasso.length > 1) this.drawRegionOutline(this.lctx, this.lasso, "drawing");
 	}
 
 	/** 直接在事件里画，不等 requestAnimationFrame —— 那要多等最多一整帧。
@@ -435,7 +450,37 @@ export class HandwritingView extends TextFileView {
 			const pt = this.toPage(e);
 
 			if (this.tool === "eraser") { this.eraseAt(pt.x, pt.y); return; }
-			if (this.tool === "lasso") { this.lasso = [[pt.x, pt.y]]; this.schedule(); return; }
+
+			// 已选中的区域：在里面按下就是拖它，不是画画
+			if (this.selRegion) {
+				const cur = this.doc.regions.find((r) => r.id === this.selRegion);
+				if (cur && pointInPoly(cur.path, pt.x, pt.y)) {
+					this.drawing = false;
+					this.strokesInRegionBefore = this.doc.strokes
+						.map((st, i) => (strokeInRegion(st, cur) ? i : -1))
+						.filter((i) => i >= 0);
+					this.beginRegionDrag(cur, pt.x, pt.y);
+					return;
+				}
+				this.select(null);   // 点到别处 -> 取消选中，然后照常画
+			}
+
+			if (this.tool === "lasso") {
+				// 套索工具兼作选择工具：点在已有区域里就是选中它
+				const hit = this.regionAt(pt.x, pt.y);
+				if (hit) {
+					this.drawing = false;
+					this.select(hit.id);
+					this.strokesInRegionBefore = this.doc.strokes
+						.map((st, i) => (strokeInRegion(st, hit) ? i : -1))
+						.filter((i) => i >= 0);
+					this.beginRegionDrag(hit, pt.x, pt.y);
+					return;
+				}
+				this.lasso = [[pt.x, pt.y]];
+				this.schedule();
+				return;
+			}
 			this.cur = { c: this.color, s: this.size, pts: [pt] };
 			this.schedule();
 		});
@@ -454,6 +499,20 @@ export class HandwritingView extends TextFileView {
 					return;
 				}
 				if (!this.plugin.settings.allowFinger) return;
+			}
+			if (this.regionDrag) {
+				e.preventDefault();
+				const g = this.doc.regions.find((r) => r.id === this.regionDrag!.id);
+				if (!g) return;
+				const p = this.toPage(e);
+				const dx = p.x - this.regionDrag.ox, dy = p.y - this.regionDrag.oy;
+				if (Math.abs(dx) + Math.abs(dy) > 1.5) this.regionDrag.moved = true;
+				this.moveRegion(g, dx, dy);
+				this.regionDrag.dx += dx; this.regionDrag.dy += dy;
+				this.regionDrag.ox = p.x; this.regionDrag.oy = p.y;
+				this.redrawAll();
+				this.rebuildOverlay();
+				return;
 			}
 			if (!this.drawing) return;
 			e.preventDefault();
@@ -491,6 +550,17 @@ export class HandwritingView extends TextFileView {
 				}
 				if (!this.plugin.settings.allowFinger) return;
 			}
+			if (this.regionDrag) {
+				const d = this.regionDrag;
+				this.regionDrag = null;
+				if (d.moved) {
+					this.undoStack.push({ kind: "region-move", id: d.id, dx: d.dx, dy: d.dy,
+						strokes: [...this.strokesInRegionBefore] });
+					this.recountPages();
+					this.requestSave();
+				}
+				return;
+			}
 			if (!this.drawing) return;
 			this.drawing = false;
 			if (this.tool === "lasso") { this.finishLasso(); return; }
@@ -524,6 +594,36 @@ export class HandwritingView extends TextFileView {
 			}
 		});
 	}
+
+	private regionAt(x: number, y: number): Region | null {
+		// 后画的在上层，从后往前找
+		for (let i = this.doc.regions.length - 1; i >= 0; i--) {
+			const g = this.doc.regions[i];
+			if (g.path.length > 2 && pointInPoly(g.path, x, y)) return g;
+		}
+		return null;
+	}
+
+	private select(id: string | null) {
+		if (this.selRegion === id) return;
+		this.selRegion = id;
+		this.redrawAll();
+		this.rebuildOverlay();
+	}
+
+	private beginRegionDrag(g: Region, x: number, y: number) {
+		this.regionDrag = { id: g.id, ox: x, oy: y, dx: 0, dy: 0, moved: false };
+	}
+
+	/** 拖动区域时圈里的笔迹跟着一起走 —— 否则圈移开之后框住的就是别的内容，
+	 *  [[笔记#区域名]] 引用到的东西会莫名其妙变掉。 */
+	private moveRegion(g: Region, dx: number, dy: number) {
+		for (const pt of g.path) { pt[0] += dx; pt[1] += dy; }
+		for (const i of this.strokesInRegionBefore) {
+			for (const p of this.doc.strokes[i].pts) { p.x += dx; p.y += dy; }
+		}
+	}
+	private strokesInRegionBefore: number[] = [];
 
 	private stopGlide() {
 		if (this.glideRaf) { cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
@@ -637,6 +737,7 @@ export class HandwritingView extends TextFileView {
 			const region: Region = { id: newId(), name: sanitizeName(name), path };
 			this.doc.regions.push(region);
 			this.undoStack.push({ kind: "region-add", id: region.id });
+			this.selRegion = region.id;
 			this.tool = "pen";
 			this.buildToolbar(this.tools);
 			this.recountPages();
@@ -689,6 +790,9 @@ export class HandwritingView extends TextFileView {
 		const s = this.scale;
 		this.overlay.style.transform =
 			`translate(${(-this.panX * s).toFixed(2)}px, ${(-this.panY * s).toFixed(2)}px) scale(${s})`;
+		// 浮动 UI 抵消掉整体缩放，否则放大画布时按钮会跟着变成巨无霸
+		const k = (1 / s).toFixed(4);
+		for (const el of this.counterScaled) el.style.transform = `scale(${k})`;
 	}
 
 	private rebuildOverlay() {
@@ -700,40 +804,61 @@ export class HandwritingView extends TextFileView {
 		this.addChild(comp);
 
 		this.overlay.empty();
+		this.counterScaled = [];
 		for (const g of this.doc.regions) this.renderRegionTag(g);
 		for (const it of this.doc.items) this.renderItem(it, comp);
+		this.syncOverlayTransform();
 	}
 
 	private renderRegionTag(g: Region) {
 		const box = polyBounds(g.path);
-		const tag = this.overlay.createDiv({ text: g.name, attr: { style: S.regionTag } });
-		tag.style.left = box.x + "px";
-		tag.style.top = box.y + "px";
-		tag.addEventListener("click", (e) => {
+		const sel = g.id === this.selRegion;
+		const bar = this.overlay.createDiv({ attr: { style: S.regionBar } });
+		bar.style.left = box.x + "px";
+		bar.style.top = box.y + "px";
+		this.counterScaled.push(bar);
+
+		const name = bar.createDiv({
+			text: g.name || "(未命名)",
+			attr: { style: sel ? S.regionNameOn : S.regionName },
+		});
+		name.addEventListener("pointerdown", (e) => e.stopPropagation());
+		name.addEventListener("click", (e) => {
 			e.stopPropagation();
-			const menu = new Menu();
-			menu.addItem((m) => m.setTitle("复制引用").setIcon("copy").onClick(() => {
-				navigator.clipboard?.writeText(`![[${this.linkBase()}#${g.name}]]`);
-				new Notice("已复制 ![[...]] 引用");
-			}));
-			menu.addItem((m) => m.setTitle("重命名").setIcon("pencil").onClick(() => {
-				const taken = this.doc.regions.filter((r) => r.id !== g.id).map((r) => r.name);
-				new NameRegionModal(this.app, taken, (name) => {
-					g.name = sanitizeName(name);
-					this.rebuildOverlay();
-					this.requestSave();
-				}, () => {}).open();
-			}));
-			menu.addItem((m) => m.setTitle("删除区域").setIcon("trash").onClick(() => {
-				const i = this.doc.regions.findIndex((r) => r.id === g.id);
-				if (i < 0) return;
-				this.undoStack.push({ kind: "region-del", index: i, region: this.doc.regions[i] });
-				this.doc.regions.splice(i, 1);
-				this.redrawAll();
+			this.select(sel ? null : g.id);
+		});
+
+		if (!sel) return;
+
+		const btn = (icon: "rename" | "copy" | "trash", title: string, cb: () => void) => {
+			const b = bar.createEl("button", { attr: { "aria-label": title, title, style: S.regionBtn } });
+			drawIcon(b, icon, 16);
+			b.addEventListener("pointerdown", (e) => e.stopPropagation());
+			b.addEventListener("click", (e) => { e.stopPropagation(); cb(); });
+		};
+
+		btn("rename", "重命名", () => {
+			const taken = this.doc.regions.filter((r) => r.id !== g.id).map((r) => r.name);
+			new NameRegionModal(this.app, taken, (n) => {
+				g.name = sanitizeName(n);
 				this.rebuildOverlay();
 				this.requestSave();
-			}));
-			menu.showAtMouseEvent(e as MouseEvent);
+			}, () => {}).open();
+		});
+		btn("copy", "复制 ![[...]] 引用", () => {
+			navigator.clipboard?.writeText(`![[${this.linkBase()}#${g.name}]]`);
+			new Notice("已复制引用");
+		});
+		btn("trash", "删除区域", () => {
+			const i = this.doc.regions.findIndex((r) => r.id === g.id);
+			if (i < 0) return;
+			this.undoStack.push({ kind: "region-del", index: i, region: this.doc.regions[i] });
+			this.doc.regions.splice(i, 1);
+			this.selRegion = null;
+			this.redrawAll();
+			this.rebuildOverlay();
+			this.requestSave();
+			new Notice(`已删除区域「${g.name}」`);
 		});
 	}
 
@@ -801,6 +926,17 @@ export class HandwritingView extends TextFileView {
 			case "item-del": this.doc.items.splice(e.index, 0, e.item); break;
 			case "region-add": this.doc.regions = this.doc.regions.filter((x) => x.id !== e.id); break;
 			case "region-del": this.doc.regions.splice(e.index, 0, e.region); break;
+			case "region-move": {
+				const g = this.doc.regions.find((r) => r.id === e.id);
+				if (g) {
+					for (const pt of g.path) { pt[0] -= e.dx; pt[1] -= e.dy; }
+					for (const i of e.strokes) {
+						const st = this.doc.strokes[i];
+						if (st) for (const p of st.pts) { p.x -= e.dx; p.y -= e.dy; }
+					}
+				}
+				break;
+			}
 		}
 		this.recountPages();
 		this.clampPan();
