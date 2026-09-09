@@ -131,13 +131,6 @@ export const S = {
 	seg:
 		"position:relative;display:flex;flex:0 0 auto;box-sizing:border-box;" +
 		`border-radius:9px;padding:2px;background:${HOVER};overflow:hidden;`,
-	// Fixed-size box holding the eraser preview. The circle inside changes size;
-	// the box does not, so nothing below it shifts while the slider moves.
-	eraserPreviewBox:
-		"flex:0 0 auto;width:48px;height:48px;display:flex;align-items:center;justify-content:center;",
-	eraserPreview:
-		"flex:0 0 auto;border-radius:50%;box-sizing:border-box;" +
-		`border:1.5px dashed ${MUTED};background:rgba(150,150,150,.14);`,
 	segPill:
 		"position:absolute;border-radius:7px;background:var(--background-primary, #fff);" +
 		"box-shadow:0 1px 3px rgba(0,0,0,.16);transition:transform .18s cubic-bezier(.3,.7,.3,1);",

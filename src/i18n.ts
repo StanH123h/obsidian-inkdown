@@ -33,6 +33,7 @@ const STR = {
 	"cmd.newNote": ["New handwriting note", "新建手写笔记"],
 	"cmd.newNoteHere": ["New handwriting note", "新建手写笔记"],
 	"cmd.toggleSource": ["Toggle handwriting view / markdown source", "手写视图 / Markdown 源码 切换"],
+	"cmd.backToHandwriting": ["Back to handwriting", "回到手写视图"],
 	"cmd.migrate": ["Migrate: rename .hw.md to .md", "迁移：把 .hw.md 重命名为 .md"],
 	"cmd.diagnostics": ["Diagnostics (for troubleshooting on mobile)", "诊断信息（移动端排查用）"],
 

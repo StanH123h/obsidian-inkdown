@@ -3,6 +3,7 @@ import { HandwritingView, VIEW_TYPE } from "./view";
 import { emptyDoc, isHandwritingData, isHandwritingFile } from "./format";
 import { embedProcessor } from "./embed";
 import { Lang, detectLang, setLang, t } from "./i18n";
+import { SIZE_MAX, SIZE_MIN } from "./dial";
 
 export interface HandwritingSettings {
 	language: string;    // "auto", "en" or "zh"
@@ -16,6 +17,9 @@ export interface HandwritingSettings {
 	predict: number;     // frames of tip prediction, 0 = off
 	lowLatency: boolean; // desynchronized canvas hint
 	allowFinger: boolean;
+	/** Where the eraser dial sits on the canvas, in pixels; -1 = never moved */
+	dialX: number;
+	dialY: number;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -30,6 +34,8 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	predict: 2,
 	lowLatency: true,
 	allowFinger: false,
+	dialX: -1,
+	dialY: -1,
 };
 
 export default class HandwritingPlugin extends Plugin {
@@ -37,6 +43,11 @@ export default class HandwritingPlugin extends Plugin {
 
 	/** Files the user explicitly asked to see as source; do not grab them back */
 	private bypass = new Set<string>();
+
+	/** The "back to handwriting" button added to a MarkdownView's header, per
+	 *  view. A MarkdownView outlives the file shown in it, so the button has to
+	 *  be taken away again when the leaf moves to something else. */
+	private backBtns = new Map<MarkdownView, HTMLElement>();
 
 	async onload() {
 		await this.loadSettings();
@@ -109,7 +120,14 @@ export default class HandwritingPlugin extends Plugin {
 		this.addCommand({
 			id: "diagnostics",
 			name: t("cmd.diagnostics"),
-			callback: () => new DiagModal(this.app, this.collectDiagnostics()).open(),
+			callback: () => {
+				// The panel has to open even when gathering the state is what broke:
+				// a command that silently does nothing is the worst outcome here
+				let data: Record<string, string>;
+				try { data = this.collectDiagnostics(); }
+				catch (e) { data = { "collect failed": (e as Error)?.stack ?? String(e) }; }
+				new DiagModal(this.app, data).open();
+			},
 		});
 
 		// Right-click a folder on desktop, long-press it on mobile.
@@ -131,6 +149,8 @@ export default class HandwritingPlugin extends Plugin {
 
 	onunload() {
 		this.bypass.clear();
+		for (const btn of this.backBtns.values()) btn.remove();
+		this.backBtns.clear();
 	}
 
 	/** No devtools on mobile, so the plugin has to report its own state */
@@ -172,11 +192,37 @@ export default class HandwritingPlugin extends Plugin {
 		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
 			const file = this.isHandwritingLeaf(leaf);
 			if (file && !this.bypass.has(file.path)) this.toHandwriting(leaf, file);
+			else this.syncBackButton(leaf, file);
 		}
+		// Views that are gone, or no longer showing markdown at all
+		for (const [view, btn] of this.backBtns)
+			if (!view.containerEl?.isConnected) { btn.remove(); this.backBtns.delete(view); }
+	}
+
+	/** Viewing the source of a handwriting note is a dead end without this: the
+	 *  toolbar that got you here belongs to the handwriting view, which is no
+	 *  longer on screen. The command palette has the same toggle, but a note you
+	 *  cannot get back into by looking at it is a trap. */
+	private syncBackButton(leaf: WorkspaceLeaf, file: TFile | null) {
+		const view = leaf.view;
+		if (!(view instanceof MarkdownView)) return;
+		const want = !!file && this.bypass.has(file.path);
+		const had = this.backBtns.get(view);
+		// A view that re-renders its header drops the button without telling us,
+		// so a remembered one that is no longer in the document counts as absent
+		if (want === (!!had && had.isConnected)) return;
+		if (!want) { had?.remove(); this.backBtns.delete(view); return; }
+		had?.remove();
+		const btn = view.addAction("pen-tool", t("cmd.backToHandwriting"), () => {
+			const f = (leaf.view as MarkdownView).file;
+			if (f) this.toHandwriting(leaf, f);
+		});
+		this.backBtns.set(view, btn);
 	}
 
 	private toHandwriting(leaf: WorkspaceLeaf, file: TFile) {
 		this.bypass.delete(file.path);
+		this.syncBackButton(leaf, null);
 		leaf.setViewState({ type: VIEW_TYPE, state: { file: file.path } });
 	}
 
@@ -185,7 +231,8 @@ export default class HandwritingPlugin extends Plugin {
 		const file = this.currentFile(leaf);
 		if (!file) return;
 		this.bypass.add(file.path);
-		leaf.setViewState({ type: "markdown", state: { file: file.path, mode: "source" } });
+		leaf.setViewState({ type: "markdown", state: { file: file.path, mode: "source" } })
+			.then(() => this.syncBackButton(leaf, file));
 	}
 
 	/* ============ Creating notes ============ */
@@ -259,7 +306,7 @@ export default class HandwritingPlugin extends Plugin {
 		// Copy the array rather than sharing DEFAULT_SETTINGS' one, which editing a
 		// width would otherwise mutate. Also guard against a damaged data.json.
 		const n = Number(this.settings.eraserSize);
-		this.settings.eraserSize = Number.isFinite(n) && n >= 3 && n <= 60 ? n : DEFAULT_SETTINGS.eraserSize;
+		this.settings.eraserSize = Number.isFinite(n) && n >= SIZE_MIN && n <= SIZE_MAX ? n : DEFAULT_SETTINGS.eraserSize;
 		if (this.settings.eraserMode !== "precise") this.settings.eraserMode = "stroke";
 		const saved = Array.isArray(this.settings.sizes) ? this.settings.sizes : [];
 		this.settings.sizes = DEFAULT_SETTINGS.sizes.map((d, i) => {

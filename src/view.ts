@@ -9,6 +9,7 @@ import { LinkModal, NameRegionModal } from "./modals";
 import { ICONS, S, drawIcon } from "./styles";
 import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
+import { buildEraserDial, Dial } from "./dial";
 
 /** Injected by esbuild at build time; see esbuild.config.mjs */
 declare const __HW_VERSION__: string;
@@ -126,6 +127,7 @@ export class HandwritingView extends TextFileView {
 	private velSamples: { t: number; x: number; y: number }[] = [];
 	private glideRaf = 0;
 	private clip!: HTMLDivElement;
+	private dial: Dial | null = null;
 	private sbar!: HTMLDivElement;
 	private sbarTimer = 0;
 
@@ -164,6 +166,14 @@ export class HandwritingView extends TextFileView {
 		const root = this.contentEl;
 		root.empty();
 		root.addClass("hw-root");
+		// Obsidian's mobile edge swipes -- sidebars in from the left and right, the
+		// command palette down from the top -- are installed on the workspace
+		// container and walk up from the touch target looking for this flag, which
+		// is the same opt-out its own sliders, graph controls and table handles
+		// use. Without it a finger on anything of ours that is not a <canvas>
+		// (the dial, a region tag, either bar) can open a sidebar mid-gesture.
+		// The pen never triggers them: the handler skips touchType "stylus".
+		root.dataset.ignoreSwipe = "true";
 
 		try {
 			root.setAttribute("style", S.root);
@@ -173,6 +183,34 @@ export class HandwritingView extends TextFileView {
 			this.clip = this.surface.createDiv({ attr: { style: S.overlayClip } });
 			this.overlay = this.clip.createDiv({ attr: { style: S.overlay } });
 			this.sbar = this.surface.createDiv({ attr: { style: S.scrollbar } });
+			// The eraser lives on the canvas, not in the tool column: it is reached
+			// constantly, and Apple Pencil's own double-tap gesture is not something
+			// a web view can see.
+			this.dial = buildEraserDial(this.surface, {
+				isEraser: () => this.tool === "eraser",
+				toggleEraser: () => {
+					this.tool = this.tool === "eraser" ? "pen" : "eraser";
+					if (this.tool === "pen") this.eraserAt = null;
+					this.clearSelection();
+					this.buildToolbar(this.tools);
+					this.buildContextBar();
+					this.redrawLive();
+				},
+				getMode: () => this.plugin.settings.eraserMode,
+				setMode: (v) => { this.plugin.settings.eraserMode = v; this.plugin.saveSettings(); },
+				getSize: () => this.plugin.settings.eraserSize,
+				setSize: (v, done) => {
+					this.plugin.settings.eraserSize = v;
+					if (done) this.plugin.saveSettings();
+				},
+				scale: () => this.scale,
+				moved: (x, y, done) => {
+					this.plugin.settings.dialX = x;
+					this.plugin.settings.dialY = y;
+					if (done) this.plugin.saveSettings();
+				},
+			});
+			this.placeDial();
 			this.bctx = this.base.getContext("2d")!;
 			// desynchronized skips the usual DOM compositing and sends the canvas
 			// buffer as directly to the display controller as it can. Only the layer
@@ -245,7 +283,6 @@ export class HandwritingView extends TextFileView {
 		const sep = () => this.seps.push(bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } }));
 
 		const penBtn = btn("pen", t("tool.pen"), () => { this.tool = "pen"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
-		const eraBtn = btn("eraser", t("tool.eraser"), () => { this.tool = "eraser"; this.clearSelection(); sync(); this.buildContextBar(); });
 		const lasBtn = btn("lasso", t("tool.lasso"), () => { this.tool = "lasso"; this.eraserAt = null; sync(); this.buildContextBar(); this.redrawLive(); });
 		const wikiBtn = btn("lasso", t("tool.wiki"), () => { this.tool = "wiki"; this.eraserAt = null; this.clearSelection(); sync(); this.buildContextBar(); this.redrawLive(); });
 		wikiBtn.createDiv({ text: "Wiki", attr: { style: S.btnBadge } });
@@ -263,8 +300,8 @@ export class HandwritingView extends TextFileView {
 		bar.createDiv({ text: "v" + __HW_VERSION__, attr: { style: S.version } });
 
 		const sync = () => {
+			this.dial?.refresh();
 			penBtn.setAttribute("style", this.tool === "pen" ? S.btnOn : S.btn);
-			eraBtn.setAttribute("style", this.tool === "eraser" ? S.btnOn : S.btn);
 			lasBtn.setAttribute("style", this.tool === "lasso" ? S.btnOn : S.btn);
 			wikiBtn.setAttribute("style", this.tool === "wiki" ? S.btnOn : S.btn);
 		};
@@ -275,6 +312,19 @@ export class HandwritingView extends TextFileView {
 
 	/** Notability's arrangement: the right bar picks a tool and never changes,
 	 *  the left bar shows that tool's configuration. */
+	/** Keep the dial on the canvas. The surface resizes under it on rotation and
+	 *  in split view, and a dial parked off the edge could never be got back. */
+	private placeDial() {
+		if (!this.dial || !this.surface) return;
+		const r = this.surface.getBoundingClientRect();
+		if (!r.width || !r.height) return;
+		const s = this.plugin.settings;
+		const first = s.dialX < 0 || s.dialY < 0;
+		const at = this.dial.place(first ? 14 : s.dialX, first ? 14 : s.dialY,
+			{ w: r.width, h: r.height });
+		if (!first) { s.dialX = at.x; s.dialY = at.y; }
+	}
+
 	/** Park the context column against the tool bar. The tool bar's size is
 	 *  content-driven -- it wraps into a second column when the buttons do not fit
 	 *  -- so a hardcoded offset would overlap it or leave a gap. */
@@ -295,11 +345,12 @@ export class HandwritingView extends TextFileView {
 		bar.empty();
 		this.syncCtx = null;
 
-		// Neither lasso has anything to configure, so the column is detached from
-		// the DOM entirely rather than merely hidden. It is positioned absolutely,
+		// Only the pen has anything to configure now that the eraser carries its
+		// own settings in the dial, so for every other tool the column is detached
+		// from the DOM rather than merely hidden. It is positioned absolutely,
 		// floating over the canvas, so attaching and detaching it never resizes the
 		// drawing area -- the canvas used to jump sideways by 72px each time.
-		if (this.tool === "lasso" || this.tool === "wiki") { bar.remove(); return; }
+		if (this.tool !== "pen") { bar.remove(); return; }
 		if (!bar.isConnected) {
 			// Reapply the style: applyLayout skips the bar while it is detached
 			bar.setAttribute("style", this.narrow ? S.ctxBarNarrow : S.ctxBar);
@@ -348,72 +399,9 @@ export class HandwritingView extends TextFileView {
 			return;
 		}
 
-		if (this.tool === "eraser") {
-			const seg = this.makeSegment(bar, vert,
-				[{ label: t("ctx.eraseStroke"), value: "stroke" }, { label: t("ctx.erasePrecise"), value: "precise" }],
-				() => this.plugin.settings.eraserMode,
-				(v) => {
-					this.plugin.settings.eraserMode = v;
-					this.plugin.saveSettings();
-				});
-			sep();
-
-			// A number alone says nothing about how big the eraser actually is, so a
-			// swatch beside the slider scales with it. The ring on the canvas stays
-			// where it belongs -- under the pointer while erasing -- rather than
-			// being parked mid-page while the slider moves.
-			const previewPx = (v: number) => Math.min(8 + v * 0.7, 46);
-			const previewBox = bar.createDiv({ attr: { style: S.eraserPreviewBox } });
-			const preview = previewBox.createDiv({ attr: { style: S.eraserPreview + `width:${previewPx(this.plugin.settings.eraserSize)}px;height:${previewPx(this.plugin.settings.eraserSize)}px;` } });
-			const slider = this.makeSlider(bar, vert, 3, 60,
-				() => this.plugin.settings.eraserSize,
-				(v) => {
-					this.plugin.settings.eraserSize = v;
-					preview.setAttribute("style", S.eraserPreview + `width:${previewPx(v)}px;height:${previewPx(v)}px;`);
-				},
-				() => this.plugin.saveSettings());
-			this.syncCtx = () => { seg.refresh(); slider.refresh(); };
-			return;
-		}
 
 	}
 
-	/** Segmented control with a pill that slides to the selected option.
-	 *  Two options sit side by side; in the narrow layout they stack instead. */
-	private makeSegment(
-		parent: HTMLElement, stacked: boolean,
-		items: { label: string; value: string }[],
-		get: () => string, set: (v: string) => void,
-	) {
-		// Stack along the bar's long axis: a vertical bar gets a vertical stack.
-		// Two Chinese labels side by side in a 60px column are unreadably tight.
-		const IW = stacked ? 56 : 52, IH = stacked ? 26 : 26;
-		const W = stacked ? IW + 4 : IW * items.length + 4;
-		const H = stacked ? IH * items.length + 4 : IH + 4;
-		const wrap = parent.createDiv({
-			attr: { style: S.seg + `width:${W}px;height:${H}px;flex-direction:${stacked ? "column" : "row"};` },
-		});
-		const pill = wrap.createDiv({
-			attr: { style: S.segPill + `width:${IW}px;height:${IH}px;left:2px;top:2px;` },
-		});
-		const els = items.map((it) => {
-			const b = wrap.createEl("button", {
-				text: it.label,
-				attr: { style: S.segItem + `width:${IW}px;height:${IH}px;flex:0 0 auto;` },
-			});
-			b.addEventListener("click", (e) => { e.stopPropagation(); set(it.value); refresh(); });
-			b.addEventListener("pointerdown", (e) => e.stopPropagation());
-			return b;
-		});
-		const refresh = () => {
-			const i = Math.max(0, items.findIndex((it) => it.value === get()));
-			pill.style.transform = stacked ? `translateY(${i * IH}px)` : `translateX(${i * IW}px)`;
-			els.forEach((b, j) => b.setAttribute(
-				"style", S.segItem + `width:${IW}px;height:${IH}px;flex:0 0 auto;` + (j === i ? S.segItemOn : "")));
-		};
-		refresh();
-		return { refresh };
-	}
 
 	/** A slider we draw ourselves.
 	 *
@@ -524,6 +512,7 @@ export class HandwritingView extends TextFileView {
 		this.recountPages();
 		this.clampPan();
 		this.placeCtxBar();
+		this.placeDial();
 		this.redrawAll();
 		this.rebuildOverlay();
 	}
@@ -1570,47 +1559,64 @@ export class HandwritingView extends TextFileView {
 
 	/* ============ Diagnostics and refresh ============ */
 
+	/** Every row is evaluated behind its own try/catch. This is the only way to
+	 *  see runtime state on mobile, where there are no devtools, so one row that
+	 *  throws must not take the panel with it -- it silently reported nothing at
+	 *  all, which is the one failure a debugging tool cannot afford. A broken row
+	 *  now shows its own error instead. */
 	diagnostics(): Record<string, string> {
-		const cs = (el: Element | null, prop: string) => (el ? getComputedStyle(el).getPropertyValue(prop) : "—");
+		const cs = (el: Element | null, prop: string) => (el ? getComputedStyle(el).getPropertyValue(prop) : "\u2014");
 		const root = this.contentEl;
-		return {
-			"contentEl class": root.className || "(empty)",
-			"root display / dir": cs(root, "display") + " / " + cs(root, "flex-direction"),
-			"root size": `${root.clientWidth} x ${root.clientHeight}`,
-			"tool bar size": this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "—",
-			"context bar": this.ctxBar
+		const rows: [string, () => string][] = [
+			["contentEl class", () => root.className || "(empty)"],
+			["root display / dir", () => cs(root, "display") + " / " + cs(root, "flex-direction")],
+			["root size", () => `${root.clientWidth} x ${root.clientHeight}`],
+			["tool bar size", () => this.tools ? `${this.tools.clientWidth} x ${this.tools.clientHeight}` : "\u2014"],
+			["context bar", () => this.ctxBar
 				? `${this.ctxBar.clientWidth} x ${this.ctxBar.clientHeight}, ${this.ctxBar.childElementCount} children, tool=${this.tool}`
-				: "absent",
-			"tool bar children": this.tools ? String(this.tools.childElementCount) : "—",
-			"bundle / manifest version": `${__HW_VERSION__} / ${this.plugin.manifest.version}`,
-			"width slot / widths": `${this.sizeIdx} / [${this.sizes.join(", ")}]`,
-			"narrow layout": String(this.narrow),
-			"last tap": this.lastHitInfo,
-			"last finger press": this.lastTouchInfo,
-			"selected region": this.selRegion
-				? (this.doc.regions.find((r) => r.id === this.selRegion)?.name ?? "?") : "none",
-			"pages / zoom": `${this.pages} / ${(this.zoom * 100).toFixed(0)}%`,
-			"scroll": `${this.panY.toFixed(0)} / ${this.contentH()}`,
-			"low-latency canvas": this.lowLatency ? "desynchronized active" : "normal compositing",
-			"coalesced events API": typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "yes" : "no",
-			"prediction API": typeof (PointerEvent.prototype as any).getPredictedEvents === "function" ? "yes" : "no (we extrapolate)",
-			"input lag p50/p95/max": pct(this.lagS),
-			"our draw p50/p95/max": pct(this.drawS),
-			"base repaint p50/p95/max": pct(this.paintS),
-			"visible strokes": `${this.visStrokes} of ${this.doc.strokes.length}`,
-			"frame interval": this.evtStamps.length > 5
-				? (() => { const d: number[] = [];
-					for (let i = 1; i < this.evtStamps.length; i++) d.push(this.evtStamps[i] - this.evtStamps[i - 1]);
-					d.sort((a, b) => a - b);
-					return d[d.length >> 1].toFixed(1) + " ms";
-				})() : "draw a stroke first",
-			"prediction lead": `${this.plugin.settings.predict} frames`,
-			"event rate": this.evtStamps.length > 5
+				: "absent"],
+			["tool bar children", () => this.tools ? String(this.tools.childElementCount) : "\u2014"],
+			["bundle / manifest version", () => `${__HW_VERSION__} / ${this.plugin.manifest.version}`],
+			["width slot / widths", () => `${this.sizeIdx} / [${this.sizes.join(", ")}]`],
+			["dial at", () => {
+				const e = this.dial?.el;
+				return e ? `${e.style.left || "?"}, ${e.style.top || "?"}` : "absent";
+			}],
+			["narrow layout", () => String(this.narrow)],
+			["last tap", () => this.lastHitInfo],
+			["last finger press", () => this.lastTouchInfo],
+			["selected region", () => this.selRegion
+				? (this.doc.regions.find((r) => r.id === this.selRegion)?.name ?? "?") : "none"],
+			["pages / zoom", () => `${this.pages} / ${(this.zoom * 100).toFixed(0)}%`],
+			["scroll", () => `${this.panY.toFixed(0)} / ${this.contentH()}`],
+			["low-latency canvas", () => this.lowLatency ? "desynchronized active" : "normal compositing"],
+			["coalesced events API", () => typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "yes" : "no"],
+			["prediction API", () => typeof (PointerEvent.prototype as any).getPredictedEvents === "function" ? "yes" : "no (we extrapolate)"],
+			["input lag p50/p95/max", () => pct(this.lagS)],
+			["our draw p50/p95/max", () => pct(this.drawS)],
+			["base repaint p50/p95/max", () => pct(this.paintS)],
+			["visible strokes", () => `${this.visStrokes} of ${this.doc.strokes.length}`],
+			["frame interval", () => {
+				if (this.evtStamps.length <= 5) return "draw a stroke first";
+				const d: number[] = [];
+				for (let i = 1; i < this.evtStamps.length; i++) d.push(this.evtStamps[i] - this.evtStamps[i - 1]);
+				d.sort((a, b) => a - b);
+				return d[d.length >> 1].toFixed(1) + " ms";
+			}],
+			["prediction lead", () => `${this.plugin.settings.predict} frames`],
+			["event rate", () => this.evtStamps.length > 5
 				? (1000 * (this.evtStamps.length - 1) /
 					(this.evtStamps[this.evtStamps.length - 1] - this.evtStamps[0])).toFixed(0) + " Hz"
-				: "draw a stroke first",
-			"strokes / items / regions": `${this.doc.strokes.length} / ${this.doc.items.length} / ${this.doc.regions.length}`,
-		};
+				: "draw a stroke first"],
+			["strokes / items / regions", () => `${this.doc.strokes.length} / ${this.doc.items.length} / ${this.doc.regions.length}`],
+		];
+
+		const out: Record<string, string> = {};
+		for (const [label, read] of rows) {
+			try { out[label] = read(); }
+			catch (e) { out[label] = "!! " + ((e as Error)?.message ?? String(e)); }
+		}
+		return out;
 	}
 
 	refresh() { this.syncCtx?.(); this.resize(); }
