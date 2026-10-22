@@ -97,7 +97,7 @@ It is not in the community plugin list yet, so install it with
 
 1. Install **BRAT** from Settings -> Community plugins.
 2. Run the command *BRAT: Add a beta plugin for testing* and paste this
-   repository's path, `StanH123h/obsidian-inklink`.
+   repository's path, `StanH123h/obsidian-inkdown`.
 3. Enable **Inkdown** under Community plugins.
 
 To install by hand instead, take `main.js` and `manifest.json` from a
