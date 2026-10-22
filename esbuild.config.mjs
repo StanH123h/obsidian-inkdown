@@ -51,7 +51,12 @@ const context = await esbuild.context({
   // Bake the version into the bundle. The toolbar badge then reports which
   // main.js is loaded, rather than what manifest.json says -- the two are
   // separate files and a sync service can deliver them at different times.
-  define: { __HW_VERSION__: JSON.stringify(manifest.version) },
+  // The build time goes in too: between releases the version stays put, and
+  // this is what tells one deployed build from the next.
+  define: {
+    __HW_VERSION__: JSON.stringify(manifest.version),
+    __HW_BUILD__: JSON.stringify(new Date().toLocaleString("sv-SE", { hour12: false }).slice(5, 16)),
+  },
   minify: production,
   plugins: [deploy],
 });

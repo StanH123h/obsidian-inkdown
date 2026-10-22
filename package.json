@@ -1,20 +1,22 @@
 {
-  "name": "obsidian-inklink",
-  "version": "0.16.0",
+  "name": "obsidian-inkdown",
+  "version": "0.17.0",
   "private": true,
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
-    "test": "esbuild src/ink.ts --bundle --format=cjs --outfile=.test-build/ink.cjs --log-level=error && esbuild src/format.ts --bundle --format=cjs --outfile=.test-build/fmt.cjs --log-level=error --external:obsidian && node test/format.test.js && node test/region-hit.test.js && node test/region-embed.test.js && node test/i18n.test.js"
+    "test": "esbuild src/ink.ts --bundle --format=cjs --outfile=.test-build/ink.cjs --log-level=error && node test/ink.test.js && esbuild src/transcribe.ts --bundle --format=cjs --platform=node --outfile=.test-build/transcribe.cjs --log-level=error --alias:obsidian=./test/obsidian-stub.js && node test/transcribe.test.js && node test/i18n.test.js",
+    "test:pad": "esbuild test/pad-harness/entry.ts --bundle --format=iife --outfile=.test-build/pad-harness.js --log-level=error --alias:obsidian=./test/pad-harness/obsidian-dom-stub.js --define:__HW_VERSION__='\"harness\"' --define:__HW_BUILD__='\"harness\"' && node test/pad.e2e.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "builtin-modules": "^4.0.0",
     "esbuild": "^0.24.2",
-    "obsidian": "^1.7.2",
+    "obsidian": "1.14.4",
     "typescript": "^5.7.2"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "1.0.0",
     "fflate": "^0.8.3"
   }
 }

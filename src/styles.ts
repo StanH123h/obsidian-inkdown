@@ -44,68 +44,39 @@ export const S = {
 		"background:var(--background-secondary, rgba(127,127,127,.07));",
 	toolsNarrow:
 		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
-		"gap:6px;flex:0 0 auto;width:100%;height:58px;padding:8px 10px;margin:0;box-sizing:border-box;" +
+		"gap:4px;flex:0 0 auto;width:100%;height:58px;padding:8px;margin:0;box-sizing:border-box;" +
 		`overflow-x:auto;overflow-y:hidden;border-top:1px solid ${BORDER};` +
 		"background:var(--background-secondary, rgba(127,127,127,.07));",
 
 	btn: BTN + `background:transparent;color:${MUTED};`,
 	btnOn: BTN + `background:${HOVER};color:${ACCENT};`,
+	// A phone held upright has about 390px for the whole tool row, convert
+	// button included, so the buttons there are a size down
+	btnSm: BTN + `width:36px;height:36px;background:transparent;color:${MUTED};`,
+	btnSmOn: BTN + `width:36px;height:36px;background:${HOVER};color:${ACCENT};`,
 
 	sep: `flex:0 0 auto;width:22px;height:1px;margin:5px 0;background:${BORDER};`,
-	sepNarrow: `flex:0 0 auto;width:1px;height:22px;margin:0 5px;background:${BORDER};`,
+	sepNarrow: `flex:0 0 auto;width:1px;height:22px;margin:0 3px;background:${BORDER};`,
 
 	// The overlay follows pan and zoom through a single CSS transform, and its
 	// children are positioned in content units. Scrolling then updates one
-	// transform instead of repositioning every child or re-rendering embeds.
+	// transform instead of repositioning every child.
 	overlayClip: "position:absolute;inset:0;pointer-events:none;overflow:hidden;",
 	overlay: "position:absolute;left:0;top:0;width:0;height:0;transform-origin:0 0;",
-	scrollbar:
-		"position:absolute;right:2px;width:4px;border-radius:2px;pointer-events:none;" +
-		`background:${MUTED};opacity:0;transition:opacity .25s;`,
-	chip:
-		"position:absolute;pointer-events:auto;box-sizing:border-box;cursor:grab;" +
-		"padding:4px 11px;border-radius:9px;white-space:nowrap;font-size:19px;line-height:1.4;" +
-		`color:${ACCENT};background:var(--background-primary,#fff);` +
-		`border:1px solid ${ACCENT};touch-action:none;`,
-	chipMissing:
-		"position:absolute;pointer-events:auto;box-sizing:border-box;cursor:grab;" +
-		"padding:4px 11px;border-radius:9px;white-space:nowrap;font-size:19px;line-height:1.4;" +
-		"color:var(--text-error,#c0392b);background:var(--background-primary,#fff);" +
-		"border:1px dashed var(--text-error,#c0392b);touch-action:none;",
-	embedBox:
-		"position:absolute;pointer-events:auto;box-sizing:border-box;" +
-		`border:1px solid ${BORDER};border-radius:9px;overflow:hidden;` +
-		"background:var(--background-primary,#fff);touch-action:none;",
-	embedBar:
-		"display:flex;align-items:center;gap:6px;padding:5px 11px;cursor:grab;" +
-		"font-size:16px;background:var(--background-secondary,rgba(127,127,127,.08));" +
-		`color:${MUTED};touch-action:none;`,
-	embedBody: "padding:10px 13px;font-size:18px;",
-	// Floating bar for a region. Positioned in content units but counter-scaled,
-	// so the buttons do not turn into giants when the canvas is zoomed in.
-	regionBar:
+	// Floating bar beside a lasso selection. Positioned in content units but
+	// counter-scaled, so the buttons do not turn into giants when zoomed in.
+	selBar:
 		"position:absolute;display:flex;align-items:center;gap:2px;pointer-events:auto;" +
 		"transform-origin:0 0;white-space:nowrap;border-radius:9px;padding:2px;" +
 		`background:${"var(--background-primary, #fff)"};box-shadow:0 1px 6px rgba(0,0,0,.18);` +
 		`border:1px solid ${BORDER};touch-action:none;`,
-	regionName:
-		"padding:3px 9px;border-radius:7px;font-size:12px;line-height:1.5;cursor:pointer;" +
-		`color:${MUTED};`,
-	regionNameOn:
-		"padding:3px 9px;border-radius:7px;font-size:12px;line-height:1.5;cursor:pointer;" +
-		"color:var(--text-on-accent,#fff);background:var(--interactive-accent,#5b6ed6);",
-	regionBtn:
+	selBtn:
 		"display:flex;align-items:center;justify-content:center;width:26px;height:26px;" +
 		"padding:0;margin:0;border:0;border-radius:7px;background:transparent;cursor:pointer;" +
 		`color:${MUTED};`,
 
-	regionTag:
-		"position:absolute;pointer-events:auto;cursor:pointer;transform:translateY(-100%);" +
-		"padding:2px 9px;border-radius:8px 8px 8px 0;font-size:15px;line-height:1.6;" +
-		"white-space:nowrap;color:var(--text-on-accent,#fff);" +
-		"background:var(--interactive-accent,#5b6ed6);opacity:.85;touch-action:none;",
-
 	// Left-hand context bar: the configuration for whichever tool is active.
+	// CTX_W and CTX_H below must match its width and height here.
 	// Positioned absolutely so it floats over the canvas instead of competing with
 	// it for width -- otherwise the drawing area jumps sideways every time the bar
 	// appears or disappears. Its offset from the edge is measured at runtime, since
@@ -126,20 +97,6 @@ export const S = {
 		`border-top:1px solid ${BORDER};box-shadow:0 -4px 14px rgba(0,0,0,.10);` +
 		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
 
-	// Segmented control with a highlight pill that slides between the options.
-	// Stacks along the bar's long axis: vertical bar, vertical stack.
-	seg:
-		"position:relative;display:flex;flex:0 0 auto;box-sizing:border-box;" +
-		`border-radius:9px;padding:2px;background:${HOVER};overflow:hidden;`,
-	segPill:
-		"position:absolute;border-radius:7px;background:var(--background-primary, #fff);" +
-		"box-shadow:0 1px 3px rgba(0,0,0,.16);transition:transform .18s cubic-bezier(.3,.7,.3,1);",
-	segItem:
-		"position:relative;display:flex;align-items:center;justify-content:center;" +
-		"flex:1 1 0;border:0;background:transparent;padding:0;margin:0;cursor:pointer;" +
-		`font-size:11px;line-height:1;letter-spacing:-.02em;color:${MUTED};transition:color .18s;`,
-	segItemOn: "color:var(--text-normal, #222);font-weight:600;",
-
 	// Hand-rolled slider. An <input type=range> needs the browser's default touch
 	// handling, which Obsidian mobile claims for its sidebar swipe, so dragging one
 	// opens the file pane instead of moving the knob. This uses pointer capture and
@@ -156,19 +113,23 @@ export const S = {
 		"flex:0 0 auto;width:30px;height:14px;line-height:14px;font-size:11px;text-align:center;" +
 		`color:${MUTED};font-variant-numeric:tabular-nums;`,
 
-	sizePop:
-		"position:absolute;z-index:30;display:flex;align-items:center;gap:11px;" +
-		"padding:11px 15px;border-radius:13px;box-sizing:border-box;" +
-		`background:var(--background-primary, #fff);border:1px solid ${BORDER};` +
-		"box-shadow:0 6px 24px rgba(0,0,0,.22);",
-	sizePopRange: "width:170px;margin:0;",
-	sizePopVal:
-		`min-width:26px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums;color:${MUTED};`,
+	// Convert: the one action that leaves the pad, so it is filled with the
+	// accent colour and carries a word as well as an icon. The auto margin
+	// pushes it to the far end of the tool bar, away from the drawing tools.
+	go:
+		BTN + "flex-direction:column;gap:3px;width:44px;height:auto;padding:7px 0 6px;margin-top:auto;" +
+		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);" +
+		"font-size:11px;line-height:1;font-weight:600;",
+	// On a phone the row has no room for the word; the accent still marks it
+	goNarrow:
+		BTN + "flex-direction:row;gap:5px;width:44px;height:36px;padding:0;margin-left:auto;" +
+		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);" +
+		"font-size:13px;line-height:1;font-weight:600;",
 
-	// Small corner label on a tool button, e.g. the Wiki variant of the lasso
+	// Small corner label on a tool button: the AI pen's "AI"
 	btnBadge:
-		"position:absolute;right:2px;bottom:1px;font-size:7px;line-height:1;" +
-		"font-weight:700;letter-spacing:-.02em;pointer-events:none;",
+		"position:absolute;right:1px;bottom:2px;font-size:8px;line-height:1;" +
+		"font-weight:800;letter-spacing:-.02em;pointer-events:none;",
 
 	version:
 		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +
@@ -176,9 +137,6 @@ export const S = {
 
 	dot: (px: number) =>
 		`width:${px}px;height:${px}px;border-radius:50%;flex:0 0 auto;background:var(--text-normal, #222);`,
-	colorDot: (c: string, on: boolean) =>
-		`width:19px;height:19px;border-radius:50%;flex:0 0 auto;background:${c};` +
-		(on ? `box-shadow:0 0 0 2px ${ACCENT};` : ""),
 };
 
 /* Icons are inline SVG rather than Obsidian's setIcon, whose icon names are not
@@ -206,16 +164,46 @@ export const ICONS = {
 		"M7 22a5 5 0 0 1-2-3.994",
 		"M3 16a2 2 0 1 0 4 0a2 2 0 1 0-4 0",
 	],
-	link: [
-		"M10.2 13.8a4.5 4.5 0 0 0 6.7.5l2.7-2.7a4.5 4.5 0 0 0-6.4-6.4l-1.5 1.5",
-		"M13.8 10.2a4.5 4.5 0 0 0-6.7-.5l-2.7 2.7a4.5 4.5 0 0 0 6.4 6.4l1.5-1.5",
-	],
 	trash: ["M4 7h16", "M9 7V5h6v2", "M7 7l1 13h8l1-13"],
-	rename: ["M4 20l4-1 9.5-9.5-3-3L5 16z", "M14.5 6.5l3 3"],
-	copy: ["M9 9h9v11H9z", "M6 15H4V4h11v2"],
 	fit: ["M4 9V5h4", "M20 9V5h-4", "M4 15v4h4", "M20 15v4h-4"],
 	undo: ["M4 10h10.5a4.5 4.5 0 0 1 0 9H9", "M4 10l4-4", "M4 10l4 4"],
-	code: ["M9 8l-4 4 4 4", "M15 8l4 4-4 4"],
+	close: ["M6 6l12 12", "M18 6L6 18"],
+	/* Paper plane, after Lucide's "send" (ISC) */
+	send: [
+		"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
+		"M21.854 2.147l-10.94 10.939",
+	],
+};
+
+/** Room the context bar takes from the page: on the right in the wide layout,
+ *  along the bottom in the narrow one */
+export const CTX_W = 72;
+export const CTX_H = 58;
+
+/* The pad covers the whole screen, which means overriding Obsidian's own sizing
+ * of .modal. Those rules differ between desktop and mobile and some may carry
+ * !important, so pad.ts applies these one by one with setProperty(...,
+ * "important") rather than as a style string. The safe-area padding keeps the
+ * tool bar clear of the iPad status bar and home indicator. */
+export const MODAL: Record<string, string> = {
+	position: "fixed",
+	inset: "0",
+	"box-sizing": "border-box",
+	width: "100%",
+	height: "100%",
+	"max-width": "none",
+	"max-height": "none",
+	"min-width": "0",
+	"min-height": "0",
+	margin: "0",
+	padding: "env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px)",
+	border: "0",
+	"border-radius": "0",
+	"box-shadow": "none",
+	transform: "none",
+	display: "flex",
+	overflow: "hidden",
+	background: "var(--background-secondary, #f2f2f2)",
 };
 
 /* Optical sizing. Rendering every icon at the same nominal size does not make

@@ -7,7 +7,7 @@ const rows = [...src.matchAll(/^\t"([\w.]+)": \[("(?:[^"\\]|\\.)*"), ("(?:[^"\\]
 let bad = 0;
 const fail = (msg) => { console.log('FAIL ' + msg); bad++; };
 
-if (rows.length < 50) fail(`only ${rows.length} entries parsed; the table format probably changed`);
+if (rows.length < 30) fail(`only ${rows.length} entries parsed; the table format probably changed`);
 
 const ph = (s) => (s.match(/\{\d\}/g) || []).sort().join(',');
 const cjk = /[一-鿿]/;

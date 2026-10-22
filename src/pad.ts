@@ -1,0 +1,1247 @@
+import { App, Modal, Notice } from "obsidian";
+import {
+	InkOpts, NOTE_INK, PAGE_H, PAGE_W, SPLINE_FROM, Stroke,
+	drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
+} from "./ink";
+import { CTX_H, CTX_W, ICONS, MODAL, S, drawIcon } from "./styles";
+import { t } from "./i18n";
+import type HandwritingPlugin from "./main";
+import { buildEraserDial, Dial } from "./dial";
+
+/** Injected by esbuild at build time; see esbuild.config.mjs */
+declare const __HW_VERSION__: string;
+declare const __HW_BUILD__: string;
+
+const EDGE_PAD = 12;   // css px
+const ZOOM_MAX = 8;
+
+/** The page is paper: white whatever the theme, with ink in near-black. It is
+ *  also what the model is sent, rendered black on white, so what you see while
+ *  writing is what gets read. */
+const PAPER = "#ffffff";
+const INK = "#1a1a1a";
+
+/** Diameter of the preview dot on a width button, capped so it fits the button */
+const dotPx = (sz: number) => Math.min(sz + 4, 28);
+
+/** "ai" is the AI pen: it writes notes to the model, which are never
+ *  transcribed. Same gesture as the pen, different meaning. */
+type Tool = "pen" | "ai" | "eraser" | "lasso";
+
+type UndoEntry =
+	| { kind: "stroke-add"; index: number }
+	| { kind: "strokes-set"; before: Stroke[] }
+	| { kind: "sel-move"; strokes: Stroke[]; dx: number; dy: number };
+
+/** How the pad was left. `convert` is set only by the convert button; closing
+ *  any other way keeps the writing for next time. */
+export interface PadExit { strokes: Stroke[]; convert: boolean }
+
+/** One sheet of paper over the whole screen.
+ *
+ *  Not a document and not a view: it holds a page of ink until the user either
+ *  converts it, which hands the strokes to the plugin to be read, or closes it,
+ *  which keeps them as a draft. Nothing here touches the vault.
+ *
+ *  The page is a fixed A4 sheet. Zoomed all the way out the whole of it fits
+ *  on screen; zoomed in, a finger pans it in either direction. */
+export class InkPad extends Modal {
+	private root!: HTMLDivElement;
+	private surface!: HTMLDivElement;
+	private base!: HTMLCanvasElement;
+	private live!: HTMLCanvasElement;
+	private overlay!: HTMLDivElement;
+	private bctx!: CanvasRenderingContext2D;
+	private lctx!: CanvasRenderingContext2D;
+	private tools!: HTMLDivElement;
+	/** Left-hand bar showing the pen's widths */
+	private ctxBar!: HTMLDivElement;
+	private syncCtx: (() => void) | null = null;
+	private syncTools: (() => void) | null = null;
+	private dial: Dial | null = null;
+	private ro?: ResizeObserver;
+	private narrow: boolean | null = null;
+	private desk = "";
+
+	private strokes: Stroke[];
+	private convert = false;
+	private cur: Stroke | null = null;
+	private lasso: [number, number][] | null = null;
+	private drawing = false;
+	private lastT = -1;
+	private paintReq: number | null = null;
+	/** A stroke just finished, still on the live layer while its predicted tip
+	 *  shrinks back; it moves to the page once that is done */
+	private retract: { st: Stroke; reach: number } | null = null;
+	private retractRaf = 0;
+
+	/** Where the eraser is, for the size preview ring */
+	private eraserAt: { x: number; y: number } | null = null;
+	/** Strokes as they were when an erase gesture began, so one drag is one undo */
+	private eraseSnap: Stroke[] | null = null;
+	/** The lasso selection: a ring plus the strokes it caught */
+	private sel: { path: [number, number][]; strokes: Stroke[]; showOpts: boolean } | null = null;
+	/** `id` is the pointer doing the dragging, so a second finger landing
+	 *  mid-drag cannot tug the selection about */
+	private selDrag: { id: number; ox: number; oy: number; dx: number; dy: number; moved: boolean } | null = null;
+	/** Floating UI that must be counter-scaled: buttons should not grow with zoom */
+	private counterScaled: HTMLElement[] = [];
+
+	private tool: Tool = "pen";
+	/** Which pen the dial goes back to when the eraser is put down */
+	private lastPen: "pen" | "ai" = "pen";
+	/** Which of the three width slots is active. The widths themselves live in
+	 *  settings, so they survive a restart and follow the vault across devices. */
+	private sizeIdx = 1;
+	private get sizes() { return this.plugin.settings.sizes; }
+	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
+	private undoStack: UndoEntry[] = [];
+
+	/** Tap detection: recorded on press, discarded once movement passes the
+	 *  threshold, because that is a stroke or a pan rather than a tap */
+	private tap: { x: number; y: number; finger: boolean } | null = null;
+	private panMoved = false;
+	/** A finger is resting on the selection; the drag starts once it leaves the
+	 *  dead zone */
+	private fingerOnSel: { x: number; y: number } | null = null;
+
+	/* Viewport. Zoom 1 is the whole page on screen; ink coordinates are always
+	   page units, independent of the screen. */
+	private zoom = 1;
+	private panX = 0;
+	private panY = 0;
+
+	/** Fingers currently on the screen. Pen writes, finger scrolls, as in Notability. */
+	private touches = new Map<number, { x: number; y: number }>();
+	private pinch: { d: number; cx: number; cy: number; zoom: number } | null = null;
+	private panFrom: { x: number; y: number } | null = null;
+	/** Recent pan samples, used to estimate flick velocity when the finger lifts */
+	private velSamples: { t: number; x: number; y: number }[] = [];
+	private glideRaf = 0;
+
+	/* What writing costs on this device. An iPad has no devtools, so the pad
+	   measures itself and hands the numbers to the diagnostics panel on close. */
+	private perf = {
+		strokes: 0, events: 0, samples: 0, penMs: 0, down: 0,
+		lag: [] as number[], live: [] as number[], paint: [] as number[],
+		/* how many main and coalesced events arrived on whole pixels */
+		mainN: 0, mainWhole: 0, coalN: 0, coalWhole: 0,
+	};
+
+	/** Whether the pen's positions arrive rounded, counted over the stroke in
+	 *  hand, plus what the last stroke turned out to be -- the guess for the
+	 *  first few samples of the next, before there are enough to tell */
+	private grid = { n: 0, whole: 0, half: 0, last: 0 };
+	/** Set on the first resize, which is when the page width is known */
+	private placed = false;
+
+	constructor(
+		app: App,
+		private plugin: HandwritingPlugin,
+		strokes: Stroke[],
+		private onExit: (exit: PadExit) => void,
+	) {
+		super(app);
+		this.strokes = strokes;
+	}
+
+	/* ============ Lifecycle ============ */
+
+	onOpen() {
+		const m = this.modalEl;
+		// The stock close button and title bar go: the tool bar has its own close
+		m.empty();
+		for (const [k, v] of Object.entries(MODAL)) m.style.setProperty(k, v, "important");
+		// A focused note behind the pad would keep the on-screen keyboard up,
+		// covering half the page
+		(document.activeElement as HTMLElement | null)?.blur?.();
+
+		const root = this.root = m.createDiv();
+		// Obsidian's mobile edge swipes walk up from the touch target looking for
+		// this flag, the same opt-out its own sliders use. Without it a finger on
+		// the dial or either bar can open a sidebar mid-gesture.
+		root.dataset.ignoreSwipe = "true";
+		root.setAttribute("style", S.root);
+		this.surface = root.createDiv({ attr: { style: S.surface } });
+		this.base = this.surface.createEl("canvas", { attr: { style: S.canvas } });
+		this.live = this.surface.createEl("canvas", { attr: { style: S.canvas } });
+		const clip = this.surface.createDiv({ attr: { style: S.overlayClip } });
+		this.overlay = clip.createDiv({ attr: { style: S.overlay } });
+		// The eraser lives on the canvas, not in the tool column: it is reached
+		// constantly, and Apple Pencil's own double-tap is not something a web
+		// view can see.
+		this.dial = buildEraserDial(this.surface, {
+			isEraser: () => this.tool === "eraser",
+			toggleEraser: () => this.setTool(this.tool === "eraser" ? this.lastPen : "eraser"),
+			getMode: () => this.plugin.settings.eraserMode,
+			setMode: (v) => { this.plugin.settings.eraserMode = v; this.plugin.saveSettings(); },
+			getSize: () => this.plugin.settings.eraserSize,
+			setSize: (v, done) => {
+				this.plugin.settings.eraserSize = v;
+				if (done) this.plugin.saveSettings();
+			},
+			scale: () => this.scale,
+			moved: (x, y, done) => {
+				this.plugin.settings.dialX = x;
+				this.plugin.settings.dialY = y;
+				if (done) this.plugin.saveSettings();
+			},
+		});
+		this.bctx = this.base.getContext("2d")!;
+		// desynchronized skips the usual DOM compositing and sends the canvas
+		// buffer as directly to the display controller as it can. Only the layer
+		// being drawn on wants this; latency matters there, stability below.
+		this.lctx = this.live.getContext("2d",
+			this.plugin.settings.lowLatency ? { desynchronized: true } : {}) as CanvasRenderingContext2D;
+		this.desk = getComputedStyle(root).getPropertyValue("--background-secondary").trim() || "#f2f2f2";
+
+		this.ctxBar = root.createDiv({ attr: { style: S.ctxBar } });
+		this.tools = root.createDiv({ attr: { style: S.tools } });
+		this.applyLayout();   // the first call always builds both bars
+		this.bindPointer();
+
+		this.scope.register(["Mod"], "z", () => { this.undo(); return false; });
+		this.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; });
+
+		this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
+		this.ro.observe(root);         // decides the narrow layout
+		this.ro.observe(this.surface); // decides the canvas size
+		this.ro.observe(this.tools);   // wraps to two columns, moving the context bar
+		this.resize();
+	}
+
+	onClose() {
+		this.ro?.disconnect();
+		if (this.paintReq != null) cancelAnimationFrame(this.paintReq);
+		cancelAnimationFrame(this.retractRaf);
+		this.stopGlide();
+		this.plugin.padReport = this.report();
+		this.modalEl.empty();
+		this.onExit({ strokes: this.strokes, convert: this.convert });
+	}
+
+	private report(): Record<string, string> {
+		const f = this.perf, sec = f.penMs / 1000;
+		return {
+			"pen strokes": String(f.strokes),
+			"pen events / s": sec > 0 ? (f.events / sec).toFixed(0) : "write something first",
+			"samples / s": sec > 0 ? (f.samples / sec).toFixed(0) : "-",
+			"samples per event": f.events ? (f.samples / f.events).toFixed(2) : "-",
+			"input lag p50/p95/max": pct(f.lag),
+			"live draw p50/p95/max": pct(f.live),
+			"page repaint p50/p95/max": pct(f.paint),
+			"whole-pixel coords": `main ${share(f.mainWhole, f.mainN)}, coalesced ${share(f.coalWhole, f.coalN)}`,
+			"rounding corrected": this.grid.last ? `yes, ${this.grid.last} px steps` : "no (input looks precise)",
+			"curve": this.plugin.settings.curve ? `spline from ${SPLINE_FROM} device px/unit, now ${this.lod().curve ? "spline" : "straight"}` : "straight",
+			"scale at close": `${this.scale.toFixed(3)} px/unit, zoom ${this.zoom.toFixed(2)}`,
+			"low-latency canvas": this.lctx.getContextAttributes?.().desynchronized ? "desynchronized active" : "normal compositing",
+			"coalesced events API": typeof PointerEvent.prototype.getCoalescedEvents === "function" ? "yes" : "no",
+		};
+	}
+
+	/** The convert button. Checked here rather than after closing, so a missing
+	 *  key leaves you on the page you wrote instead of throwing it away. */
+	private tryConvert() {
+		if (!this.strokes.length) { new Notice(t("notice.empty")); return; }
+		const problem = this.plugin.convertBlocker();
+		if (problem) { new Notice(problem); return; }
+		this.convert = true;
+		this.close();
+	}
+
+	private applyLayout() {
+		const narrow = this.root.clientWidth > 0 && this.root.clientWidth < 420;
+		if (narrow === this.narrow) return;
+		this.narrow = narrow;
+		this.root.setAttribute("style", narrow ? S.rootNarrow : S.root);
+		this.tools.setAttribute("style", narrow ? S.toolsNarrow : S.tools);
+		if (this.ctxBar.isConnected) this.ctxBar.setAttribute("style", narrow ? S.ctxBarNarrow : S.ctxBar);
+		this.buildToolbar();
+		this.buildContextBar();
+	}
+
+	/* ============ Tool bar ============ */
+
+	private setTool(tool: Tool) {
+		this.tool = tool;
+		if (tool === "pen" || tool === "ai") this.lastPen = tool;
+		if (tool !== "eraser") this.eraserAt = null;
+		if (tool !== "lasso") this.clearSelection();
+		this.syncTools?.();
+		this.buildContextBar();
+		this.redrawLive();
+	}
+
+	private buildToolbar() {
+		const bar = this.tools;
+		bar.empty();
+
+		const off = this.narrow ? S.btnSm : S.btn, on = this.narrow ? S.btnSmOn : S.btnOn;
+		const btn = (icon: keyof typeof ICONS, title: string, cb: () => void) => {
+			const b = bar.createEl("button", { attr: { "aria-label": title, title, style: off } });
+			drawIcon(b, icon);
+			b.addEventListener("click", cb);
+			return b;
+		};
+		const sep = () => bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } });
+
+		btn("close", t("tool.close"), () => this.close());
+		sep();
+		const penBtn = btn("pen", t("tool.pen"), () => this.setTool("pen"));
+		const aiBtn = btn("pen", t("tool.aiPen"), () => this.setTool("ai"));
+		aiBtn.createDiv({ text: "AI", attr: { style: S.btnBadge + `color:${NOTE_INK};` } });
+		const lasBtn = btn("lasso", t("tool.lasso"), () => this.setTool("lasso"));
+		sep();
+		btn("fit", t("tool.fit"), () => this.fitPage());
+		btn("undo", t("tool.undo"), () => this.undo());
+		btn("trash", t("tool.clear"), () => this.clearPage());
+
+		const go = bar.createEl("button", {
+			attr: { "aria-label": t("tool.convertHint"), title: t("tool.convertHint"), style: this.narrow ? S.goNarrow : S.go },
+		});
+		drawIcon(go, "send", 18);
+		if (!this.narrow) go.createSpan({ text: t("tool.convert") });
+		go.addEventListener("click", () => this.tryConvert());
+
+		// The version is printed on the tool bar: when debugging across a sync
+		// service it is the fastest way to confirm which build is running. It comes
+		// from the bundle, not from manifest.json, because those are separate
+		// files and a sync service can deliver them at different times. A phone
+		// has no room for it; the diagnostics command reports it too.
+		if (!this.narrow) {
+			const v = bar.createDiv({ text: "v" + __HW_VERSION__, attr: { style: S.version } });
+			v.createDiv({ text: __HW_BUILD__ });
+		}
+
+		this.syncTools = () => {
+			this.dial?.refresh();
+			penBtn.setAttribute("style", this.tool === "pen" ? on : off);
+			aiBtn.setAttribute("style", (this.tool === "ai" ? on : off) + `color:${NOTE_INK};`);
+			lasBtn.setAttribute("style", this.tool === "lasso" ? on : off);
+		};
+		this.syncTools();
+	}
+
+	/* ============ Left context bar ============ */
+
+	/** Keep the dial on the canvas. The surface resizes under it on rotation and
+	 *  in split view, and a dial parked off the edge could never be got back. */
+	private placeDial() {
+		if (!this.dial) return;
+		const r = this.surface.getBoundingClientRect();
+		if (!r.width || !r.height) return;
+		const s = this.plugin.settings;
+		const first = s.dialX < 0 || s.dialY < 0;
+		const at = this.dial.place(first ? 14 : s.dialX, first ? 14 : s.dialY,
+			{ w: r.width, h: r.height });
+		if (!first) { s.dialX = at.x; s.dialY = at.y; }
+	}
+
+	/** Park the context column against the tool bar. The tool bar's size is
+	 *  content-driven -- it wraps into a second column when the buttons do not fit
+	 *  -- so a hardcoded offset would overlap it or leave a gap. */
+	private placeCtxBar() {
+		if (!this.ctxBar.isConnected) return;
+		if (this.narrow) {
+			this.ctxBar.style.bottom = this.tools.offsetHeight + "px";
+			this.ctxBar.style.right = "";
+		} else {
+			this.ctxBar.style.right = this.tools.offsetWidth + "px";
+			this.ctxBar.style.bottom = "";
+		}
+	}
+
+	private buildContextBar() {
+		const bar = this.ctxBar;
+		bar.empty();
+		this.syncCtx = null;
+
+		// Only the pens have anything to configure, the eraser carrying its own
+		// settings in the dial, so for every other tool the column is detached
+		// from the DOM rather than merely hidden. It floats over the canvas, so
+		// attaching and detaching it never resizes the drawing area.
+		if (this.tool !== "pen" && this.tool !== "ai") { bar.remove(); return; }
+		if (!bar.isConnected) {
+			// Reapply the style: applyLayout skips the bar while it is detached
+			bar.setAttribute("style", this.narrow ? S.ctxBarNarrow : S.ctxBar);
+			this.root.insertBefore(bar, this.tools);
+		}
+		this.placeCtxBar();
+		const vert = !this.narrow;
+
+		const dots: HTMLElement[] = [];
+		const btns = this.sizes.map((sz, i) => {
+			const b = bar.createEl("button", { attr: { "aria-label": t("ctx.penWidth", sz), style: S.btn } });
+			dots.push(b.createDiv({ attr: { style: S.dot(dotPx(sz)) } }));
+			b.addEventListener("click", () => { this.sizeIdx = i; sync(); });
+			return b;
+		});
+		bar.createDiv({ attr: { style: vert ? S.sep : S.sepNarrow } });
+
+		// Adjusts whichever width slot is active, previewing on its dot
+		const slider = this.makeSlider(bar, vert, 1, 28,
+			() => this.sizes[this.sizeIdx],
+			(v) => {
+				this.sizes[this.sizeIdx] = v;
+				dots[this.sizeIdx].setAttribute("style", S.dot(dotPx(v)));
+				btns[this.sizeIdx].setAttribute("aria-label", t("ctx.penWidth", v));
+			},
+			() => this.plugin.saveSettings());
+
+		const sync = () => {
+			btns.forEach((b, i) => b.setAttribute("style", i === this.sizeIdx ? S.btnOn : S.btn));
+			slider.refresh();
+		};
+		this.syncCtx = sync;
+		sync();
+	}
+
+	/** A slider we draw ourselves.
+	 *
+	 *  <input type="range"> needs the browser's default touch handling, and
+	 *  Obsidian mobile claims horizontal drags for its sidebar gesture, so
+	 *  dragging one opens the file pane instead of moving the knob. Pointer
+	 *  capture plus touch-action:none, the same approach the canvas uses, keeps
+	 *  the gesture from leaking out. */
+	private makeSlider(
+		parent: HTMLElement, vert: boolean, min: number, max: number,
+		get: () => number, onInput: (v: number) => void, onDone: () => void,
+	) {
+		const LEN = 118, THICK = 26, KNOB = 18;
+		const el = parent.createDiv({
+			attr: { style: S.slider + (vert ? `width:${THICK}px;height:${LEN}px;` : `width:${LEN}px;height:${THICK}px;`) },
+		});
+		el.createDiv({
+			attr: {
+				style: S.sliderTrack + (vert
+					? `left:${THICK / 2 - 2}px;top:${KNOB / 2}px;width:4px;height:${LEN - KNOB}px;`
+					: `top:${THICK / 2 - 2}px;left:${KNOB / 2}px;height:4px;width:${LEN - KNOB}px;`),
+			},
+		});
+		const fill = el.createDiv({ attr: { style: S.sliderFill } });
+		const knob = el.createDiv({
+			attr: { style: S.sliderKnob + `width:${KNOB}px;height:${KNOB}px;box-sizing:border-box;` },
+		});
+		const label = parent.createDiv({ attr: { style: S.sliderVal } });
+
+		const span = LEN - KNOB;
+		const refresh = () => {
+			const v = get();
+			const f = (v - min) / (max - min);
+			if (vert) {
+				// Up is more, which reads the right way round for a size control
+				const y = (1 - f) * span;
+				knob.style.left = `${THICK / 2 - KNOB / 2}px`;
+				knob.style.top = `${y}px`;
+				fill.style.cssText = S.sliderFill + `left:${THICK / 2 - 2}px;width:4px;top:${y + KNOB / 2}px;height:${span - y}px;`;
+			} else {
+				const x = f * span;
+				knob.style.top = `${THICK / 2 - KNOB / 2}px`;
+				knob.style.left = `${x}px`;
+				fill.style.cssText = S.sliderFill + `top:${THICK / 2 - 2}px;height:4px;left:${KNOB / 2}px;width:${x}px;`;
+			}
+			label.setText(String(v));
+		};
+
+		const apply = (e: PointerEvent) => {
+			const r = el.getBoundingClientRect();
+			const f = vert
+				? 1 - (e.clientY - r.top - KNOB / 2) / span
+				: (e.clientX - r.left - KNOB / 2) / span;
+			const v = Math.round(min + Math.min(Math.max(f, 0), 1) * (max - min));
+			if (v !== get()) onInput(v);
+			refresh();
+		};
+
+		el.addEventListener("pointerdown", (e: PointerEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			el.setPointerCapture(e.pointerId);
+			apply(e);
+		});
+		el.addEventListener("pointermove", (e: PointerEvent) => {
+			if (!el.hasPointerCapture(e.pointerId)) return;
+			e.preventDefault();
+			apply(e);
+		});
+		const end = (e: PointerEvent) => {
+			if (!el.hasPointerCapture(e.pointerId)) return;
+			el.releasePointerCapture(e.pointerId);
+			onDone();
+		};
+		el.addEventListener("pointerup", end);
+		el.addEventListener("pointercancel", end);
+		el.addEventListener("touchstart", (e: TouchEvent) => e.preventDefault());
+
+		refresh();
+		return { refresh };
+	}
+
+	/* ============ Size and coordinates ============ */
+
+	/** The part of the canvas the page may use, in css px. The context bar
+	 *  floats over the canvas, and its room is kept even while it is hidden, so
+	 *  the page does not jump sideways each time the pen is picked up or put
+	 *  down. */
+	private get usableW() { return Math.max(this.surface.clientWidth - (this.narrow ? 0 : CTX_W), 80); }
+	private get usableH() { return Math.max(this.surface.clientHeight - (this.narrow ? CTX_H : 0), 80); }
+
+	/** The zoom at which the page fills the width. Held upright that is zoom 1
+	 *  anyway; in landscape the whole page is small, and the pad opens here. */
+	private widthZoom() {
+		return Math.max(1, (Math.max(this.usableW - EDGE_PAD * 2, 80) / PAGE_W) / this.fitScale);
+	}
+
+	/** Screen pixels per page unit at zoom 1: the whole page fits, with EDGE_PAD
+	 *  to spare, so zooming out never shows less than all of it. On an iPad held
+	 *  upright that is close to the full width anyway. */
+	private get fitScale() {
+		const w = Math.max(this.usableW - EDGE_PAD * 2, 80);
+		const h = Math.max(this.usableH - EDGE_PAD * 2, 80);
+		return Math.min(w / PAGE_W, h / PAGE_H);
+	}
+	private get scale() { return this.fitScale * this.zoom; }
+	/** The whole canvas, in page units: what has to be painted */
+	private get viewW() { return this.surface.clientWidth / this.scale; }
+	private get viewH() { return this.surface.clientHeight / this.scale; }
+
+	private resize() {
+		const r = this.surface.getBoundingClientRect();
+		if (!r.width || !r.height) return;
+		const dpr = window.devicePixelRatio || 1;
+		for (const cv of [this.base, this.live]) {
+			cv.width = Math.round(r.width * dpr);
+			cv.height = Math.round(r.height * dpr);
+			cv.style.width = r.width + "px";
+			cv.style.height = r.height + "px";
+		}
+		if (!this.placed) {
+			// Open at the top of the page, filling the width
+			this.placed = true;
+			this.zoom = this.widthZoom();
+			this.panX = this.panY = -Infinity;
+		}
+		this.clampPan();
+		this.placeCtxBar();
+		this.placeDial();
+		this.redrawAll();
+		this.rebuildOverlay();
+	}
+
+	/** Bake the content-to-device-pixel pan and zoom into the context in one go */
+	private applyTransform(cx: CanvasRenderingContext2D) {
+		const dpr = window.devicePixelRatio || 1;
+		const s = this.scale * dpr;
+		cx.setTransform(s, 0, 0, s, -this.panX * s, -this.panY * s);
+		cx.lineCap = "round";
+		cx.lineJoin = "round";
+	}
+
+	/** @param r  the canvas rect, when the caller already has it: a batch of
+	 *  coalesced samples needs it once, not once per sample */
+	private toPage(e: { clientX: number; clientY: number; pressure?: number; timeStamp?: number }, r = this.live.getBoundingClientRect()) {
+		return {
+			x: (e.clientX - r.left) / this.scale + this.panX,
+			y: (e.clientY - r.top) / this.scale + this.panY,
+			p: e.pressure ?? 0.5,
+			t: e.timeStamp,
+		};
+	}
+
+	/** On each axis: a page smaller than the usable area sits in its middle, a
+	 *  larger one can be panned until its edge, plus the margin, reaches the
+	 *  area's edge */
+	private clampPan() {
+		const m = EDGE_PAD / this.scale;
+		const fit = (pan: number, view: number, page: number) =>
+			view >= page + 2 * m ? -(view - page) / 2 : Math.min(Math.max(pan, -m), page - view + m);
+		this.panX = fit(this.panX, this.usableW / this.scale, PAGE_W);
+		this.panY = fit(this.panY, this.usableH / this.scale, PAGE_H);
+	}
+
+	private syncViewport() {
+		this.clampPan();
+		this.redrawAll();
+		this.syncOverlayTransform();
+	}
+
+	private opts(): InkOpts { return this.plugin.opts(); }
+
+	/** The settings as they apply at the current zoom: the spline only once it
+	 *  would show (see SPLINE_FROM) */
+	private lod(): InkOpts {
+		const o = this.opts();
+		return o.curve && this.scale * (window.devicePixelRatio || 1) >= SPLINE_FROM ? o : { ...o, curve: 0 };
+	}
+
+	/* ============ Canvas rendering ============ */
+
+	/** Coalesce base-layer repaints to one per animation frame. Pinch and pan
+	 *  deliver about 120 pointermove events a second on a 60Hz panel, and
+	 *  re-rasterising every visible stroke on each one wastes half the work.
+	 *  Nothing reads the canvas back, so deferring a frame is safe everywhere. */
+	private redrawAll() {
+		if (this.paintReq != null) return;
+		this.paintReq = requestAnimationFrame(() => { this.paintReq = null; this.paintAll(); });
+	}
+
+	private paintAll() {
+		const t0 = performance.now();
+		const cx = this.bctx;
+		cx.setTransform(1, 0, 0, 1, 0, 0);
+		cx.clearRect(0, 0, this.base.width, this.base.height);
+		this.applyTransform(cx);
+
+		// The desk around the page, then the page and its edge
+		cx.fillStyle = this.desk;
+		cx.fillRect(this.panX - 8, this.panY - 8, this.viewW + 16, this.viewH + 16);
+		cx.fillStyle = PAPER;
+		cx.fillRect(0, 0, PAGE_W, PAGE_H);
+		cx.lineWidth = 1 / this.scale;
+		cx.strokeStyle = "rgba(0,0,0,.22)";
+		cx.strokeRect(0, 0, PAGE_W, PAGE_H);
+
+		// Zoomed in, most of the page is off screen; skip the ink that is
+		const x0 = this.panX - 40, x1 = this.panX + this.viewW + 40;
+		const y0 = this.panY - 40, y1 = this.panY + this.viewH + 40;
+		for (const st of this.strokes) {
+			if (st === this.retract?.st) continue;   // still on the live layer
+			const b = bboxOf(st);
+			if (b.x1 < x0 || b.x0 > x1 || b.y1 < y0 || b.y0 > y1) continue;
+			this.fillStroke(cx, st);
+		}
+		this.redrawLive();
+		push(this.perf.paint, performance.now() - t0);
+	}
+
+	/** Fill a finished stroke from its cached outline at the current level of
+	 *  detail, building it the first time, or again once the stroke has moved
+	 *  or the settings have changed */
+	private fillStroke(cx: CanvasRenderingContext2D, st: Stroke) {
+		const path = outline(st, this.lod());
+		if (!path) return;
+		cx.fillStyle = st.c;
+		cx.fill(path);
+	}
+
+	private drawRing(cx: CanvasRenderingContext2D, path: [number, number][], drawing: boolean) {
+		if (path.length < 2) return;
+		cx.save();
+		cx.setLineDash(drawing ? [] : [9 / this.scale, 6 / this.scale]);
+		cx.lineWidth = (drawing ? 2 : 3) / this.scale;
+		cx.strokeStyle = "rgba(70,135,255,1)";
+		pathToCanvas(cx, path);
+		if (!drawing) {
+			cx.fillStyle = "rgba(70,135,255,.16)";
+			cx.fill();
+		}
+		cx.stroke();
+		cx.restore();
+	}
+
+	/** Called straight from the event rather than via requestAnimationFrame,
+	 *  which would cost up to a whole frame. Coalesced events already arrive one
+	 *  batch per frame, so this adds no redraws; it just happens a frame earlier. */
+	private redrawLive() {
+		this.lctx.setTransform(1, 0, 0, 1, 0, 0);
+		this.lctx.clearRect(0, 0, this.live.width, this.live.height);
+		this.applyTransform(this.lctx);
+		// Predicted points are drawn but never stored; the next batch of real
+		// samples discards and recomputes them
+		if (this.cur) drawStroke(this.lctx, this.cur, this.lod(), this.drawing ? this.plugin.settings.predict : 0);
+		if (this.retract) drawStroke(this.lctx, this.retract.st, this.lod(), this.plugin.settings.predict, this.retract.reach);
+		if (this.lasso) this.drawRing(this.lctx, this.lasso, true);
+		if (this.sel) this.drawRing(this.lctx, this.sel.path, false);
+		// Eraser preview: how big the eraser is and where it currently sits
+		if (this.tool === "eraser" && this.eraserAt) {
+			const cx = this.lctx, r = this.plugin.settings.eraserSize;
+			cx.save();
+			cx.lineWidth = 1.5 / this.scale;
+			cx.setLineDash([5 / this.scale, 4 / this.scale]);
+			cx.strokeStyle = "rgba(130,130,130,.9)";
+			cx.fillStyle = "rgba(150,150,150,.12)";
+			cx.beginPath();
+			cx.arc(this.eraserAt.x, this.eraserAt.y, r, 0, Math.PI * 2);
+			cx.fill();
+			cx.stroke();
+			cx.restore();
+		}
+	}
+
+	/** The pen has lifted, so the predicted tip was a guess past where the
+	 *  stroke really ends. Shrink it back over four frames, about 65ms, then
+	 *  hand the stroke to the page: vanishing in one frame, it read as the
+	 *  stroke jumping. */
+	private finishRetract(st: Stroke) {
+		this.settleRetract();
+		if (!this.plugin.settings.predict) { this.fillStroke(this.bctx, st); return; }
+		this.retract = { st, reach: 1 };
+		const step = () => {
+			const r = this.retract;
+			if (!r) return;
+			r.reach -= 0.25;
+			if (r.reach <= 1e-6) { this.settleRetract(); return; }
+			this.redrawLive();
+			this.retractRaf = requestAnimationFrame(step);
+		};
+		this.retractRaf = requestAnimationFrame(step);
+	}
+
+	/** Put a shrinking stroke on the page now, as it will end up */
+	private settleRetract() {
+		cancelAnimationFrame(this.retractRaf);
+		const r = this.retract;
+		if (!r) return;
+		this.retract = null;
+		// Onto the page first, then off the live layer, so there is no frame
+		// with the stroke on neither
+		if (this.strokes.includes(r.st)) this.fillStroke(this.bctx, r.st);
+		this.redrawLive();
+	}
+
+	/* ============ Input ============ */
+
+	/* Responsibilities are split by input device:
+	 *   pen     writes, erases, draws the lasso and drags a selection
+	 *   finger  pans, pinch-zooms, drags a selection, and taps one to bring up
+	 *           its delete button. Never draws, unless the setting allows it.
+	 *   mouse   there is no finger on desktop, so it acts as the pen, and the
+	 *           wheel pans and zooms.
+	 */
+	private bindPointer() {
+		const el = this.live;
+
+		// Everything that happens on the canvas is ours. Stopping it here spares
+		// every pen sample a trip through whatever Obsidian listens for higher up.
+		for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel"])
+			el.addEventListener(type, (e) => e.stopPropagation());
+
+		el.addEventListener("pointerdown", (e: PointerEvent) => {
+			const finger = e.pointerType === "touch";
+			// Anything new: the last stroke's tip has shrunk enough
+			this.settleRetract();
+
+			if (finger && !this.plugin.settings.allowFinger) {
+				// Ignore every touch while the pen is down, or resting a palm on the
+				// screen while writing would scroll the page
+				if (this.drawing) return;
+				this.stopGlide();
+				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+				el.setPointerCapture(e.pointerId);
+				if (this.touches.size >= 2) { this.panFrom = null; this.fingerOnSel = null; return; }
+
+				const p = this.toPage(e);
+				this.tap = { x: e.clientX, y: e.clientY, finger: true };
+				// On the selection a drag moves it, anywhere else it pans. Either way
+				// the gesture only starts past the dead zone, so a tap stays a tap.
+				if (this.sel && pointInPoly(this.sel.path, p.x, p.y)) {
+					this.fingerOnSel = { x: e.clientX, y: e.clientY };
+					this.panFrom = null;
+					return;
+				}
+				this.fingerOnSel = null;
+				this.panFrom = { x: e.clientX, y: e.clientY };
+				this.velSamples = [{ t: performance.now(), x: e.clientX, y: e.clientY }];
+				this.panMoved = false;
+				return;
+			}
+
+			e.preventDefault();
+			// The pen takes over everything: drop any pan in progress
+			if (!finger) { this.stopGlide(); this.touches.clear(); this.panFrom = null; this.pinch = null; }
+			el.setPointerCapture(e.pointerId);
+			const pt = this.toPage(e);
+
+			if (this.tool === "eraser") {
+				this.drawing = true;
+				this.eraseSnap = this.strokes;
+				this.eraseAt(pt.x, pt.y);
+				return;
+			}
+			if (this.tool === "lasso") {
+				// Pressing inside the selection picks it up; anywhere else starts a
+				// new ring, which replaces it
+				if (this.sel && pointInPoly(this.sel.path, pt.x, pt.y)) {
+					this.selDrag = { id: e.pointerId, ox: pt.x, oy: pt.y, dx: 0, dy: 0, moved: false };
+					return;
+				}
+				this.drawing = true;
+				this.lastT = e.timeStamp;
+				this.clearSelection();
+				this.lasso = [[pt.x, pt.y]];
+				this.redrawLive();
+				return;
+			}
+
+			this.drawing = true;
+			this.lastT = e.timeStamp;
+			this.perf.down = e.timeStamp;
+			this.grid.n = this.grid.whole = this.grid.half = 0;
+			this.noteGrid(e);
+			const ai = this.tool === "ai";
+			this.cur = { c: ai ? NOTE_INK : INK, s: this.size, pts: [pt], q: this.halfStep(), ...(ai ? { ai } : {}) };
+			this.redrawLive();
+		});
+
+		el.addEventListener("pointermove", (e: PointerEvent) => {
+			if (this.tap && Math.hypot(e.clientX - this.tap.x, e.clientY - this.tap.y) > (this.tap.finger ? 16 : 6)) {
+				this.tap = null;
+			}
+
+			if (this.selDrag) {
+				if (e.pointerId !== this.selDrag.id) return;
+				e.preventDefault();
+				const p = this.toPage(e);
+				const dx = p.x - this.selDrag.ox, dy = p.y - this.selDrag.oy;
+				if (Math.abs(dx) + Math.abs(dy) > 1.5) this.selDrag.moved = true;
+				this.moveSelection(dx, dy);
+				this.selDrag.dx += dx; this.selDrag.dy += dy;
+				this.selDrag.ox = p.x; this.selDrag.oy = p.y;
+				this.redrawAll();
+				this.rebuildOverlay();
+				return;
+			}
+
+			if (this.touches.has(e.pointerId)) {
+				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+				if (this.touches.size >= 2) { this.handlePinch(); return; }
+
+				if (this.fingerOnSel) {
+					if (Math.hypot(e.clientX - this.fingerOnSel.x, e.clientY - this.fingerOnSel.y) < 4) return;
+					const p = this.toPage(e);
+					this.fingerOnSel = null;
+					this.selDrag = { id: e.pointerId, ox: p.x, oy: p.y, dx: 0, dy: 0, moved: false };
+					return;
+				}
+				if (this.panFrom) {
+					// Dead zone: below this distance it is not a pan, otherwise a slight
+					// wobble would drag the view
+					if (!this.panMoved) {
+						if (Math.hypot(e.clientX - this.panFrom.x, e.clientY - this.panFrom.y) < 4) return;
+						this.panMoved = true;
+					}
+					this.panX -= (e.clientX - this.panFrom.x) / this.scale;
+					this.panY -= (e.clientY - this.panFrom.y) / this.scale;
+					this.panFrom = { x: e.clientX, y: e.clientY };
+					this.velSamples.push({ t: performance.now(), x: e.clientX, y: e.clientY });
+					if (this.velSamples.length > 8) this.velSamples.shift();
+					this.syncViewport();
+					return;
+				}
+				if (!this.plugin.settings.allowFinger) return;
+			}
+
+			if (!this.drawing) {
+				// Hovering with a pen or mouse still previews the eraser ring
+				if (this.tool === "eraser" && e.pointerType !== "touch") {
+					this.eraserAt = this.toPage(e);
+					this.redrawLive();
+				}
+				return;
+			}
+			e.preventDefault();
+			if (this.tool === "eraser") { const p = this.toPage(e); this.eraseAt(p.x, p.y); return; }
+
+			// On iPadOS the coalesced windows of consecutive pointermove events
+			// overlap, so deduplicate by strictly increasing timestamp
+			const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+			const fresh: PointerEvent[] = [];
+			for (const ev of evs) {
+				if (ev.timeStamp <= this.lastT) continue;
+				this.lastT = ev.timeStamp;
+				fresh.push(ev);
+			}
+			if (!fresh.length && e.timeStamp > this.lastT) { this.lastT = e.timeStamp; fresh.push(e); }
+
+			const r = this.live.getBoundingClientRect();
+			if (this.tool === "lasso") {
+				for (const ev of fresh) { const p = this.toPage(ev, r); this.lasso?.push([p.x, p.y]); }
+				this.redrawLive();
+				return;
+			}
+			if (!this.cur) return;
+			for (const ev of fresh) { this.cur.pts.push(this.toPage(ev, r)); this.noteGrid(ev); }
+			this.cur.q = this.halfStep();
+			const f0 = this.perf, whole = (v: number) => Math.abs(v - Math.round(v)) < 1e-3;
+			f0.mainN++;
+			if (whole(e.clientX) && whole(e.clientY)) f0.mainWhole++;
+			if (evs.length > 1 || evs[0] !== e) for (const ev of evs) {
+				f0.coalN++;
+				if (whole(ev.clientX) && whole(ev.clientY)) f0.coalWhole++;
+			}
+			const t0 = performance.now();
+			this.redrawLive();
+			const f = this.perf;
+			f.events++;
+			f.samples += fresh.length;
+			push(f.lag, t0 - e.timeStamp);
+			push(f.live, performance.now() - t0);
+		});
+
+		const end = (e: PointerEvent) => {
+			const wasTap = this.tap;
+			this.tap = null;
+			this.fingerOnSel = null;
+
+			const wasFinger = this.touches.delete(e.pointerId);
+			if (wasFinger) {
+				if (this.touches.size < 2) this.pinch = null;
+				this.panFrom = this.touches.size === 1 ? { ...[...this.touches.values()][0] } : null;
+			}
+
+			if (this.selDrag && this.selDrag.id === e.pointerId) {
+				const d = this.selDrag;
+				this.selDrag = null;
+				if (d.moved) {
+					// Dragging an empty ring moves no ink: nothing to undo
+					if (this.sel?.strokes.length) {
+						this.undoStack.push({ kind: "sel-move", strokes: [...this.sel.strokes], dx: d.dx, dy: d.dy });
+					}
+				} else if (this.sel) {
+					this.sel.showOpts = !this.sel.showOpts;
+					this.rebuildOverlay();
+				}
+				return;
+			}
+
+			// A finger tap: on the selection it brings up the delete button, off it
+			// it lets go of the selection
+			if (wasTap?.finger) {
+				if (this.sel) {
+					const p = this.toPage(e);
+					if (pointInPoly(this.sel.path, p.x, p.y)) {
+						this.sel.showOpts = !this.sel.showOpts;
+						this.rebuildOverlay();
+					} else this.clearSelection();
+				}
+				return;
+			}
+
+			if (wasFinger) {
+				if (this.touches.size === 0 && this.panMoved) this.startGlide();
+				if (!this.plugin.settings.allowFinger) return;
+			}
+
+			if (!this.drawing) return;
+			this.drawing = false;
+			if (this.tool === "eraser") {
+				const snap = this.eraseSnap;
+				this.eraseSnap = null;
+				this.eraserAt = null;
+				this.redrawLive();
+				// One erase gesture is one undo step
+				if (snap && snap !== this.strokes) this.undoStack.push({ kind: "strokes-set", before: snap });
+				return;
+			}
+			if (this.tool === "lasso") { this.finishLasso(); return; }
+			if (this.cur && this.cur.pts.length) {
+				this.cur.q = this.halfStep();
+				const g = this.grid;
+				if (g.n >= 6) g.last = this.cur.q * 2 * this.scale;
+				this.strokes.push(this.cur);
+				this.undoStack.push({ kind: "stroke-add", index: this.strokes.length - 1 });
+				this.finishRetract(this.cur);
+				// Build the other level of detail now, while the pen is up, so a
+				// pinch that crosses SPLINE_FROM never has to stop and build it
+				const o = this.opts();
+				if (o.curve) { outline(this.cur, o); outline(this.cur, { ...o, curve: 0 }); }
+				this.perf.strokes++;
+				this.perf.penMs += Math.max(0, e.timeStamp - this.perf.down);
+			}
+			this.cur = null;
+			this.redrawLive();
+		};
+		el.addEventListener("pointerup", end);
+		el.addEventListener("pointercancel", end);
+		el.addEventListener("touchstart", (ev: TouchEvent) => ev.preventDefault());
+		el.addEventListener("contextmenu", (ev: Event) => ev.preventDefault());
+
+		// Desktop: the wheel pans, Ctrl/Cmd plus wheel zooms about the pointer
+		el.addEventListener("wheel", (e: WheelEvent) => {
+			e.preventDefault();
+			this.stopGlide();
+			if (e.ctrlKey || e.metaKey) {
+				const p = this.toPage(e);
+				this.setZoom(this.zoom * Math.exp(-e.deltaY / 300), p.x, p.y, e.clientX, e.clientY);
+			} else {
+				this.panY += e.deltaY / this.scale;
+				this.panX += e.deltaX / this.scale;
+				this.syncViewport();
+			}
+		}, { passive: false });
+	}
+
+	private stopGlide() {
+		if (this.glideRaf) { cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
+	}
+
+	/** Inertial scrolling: after the finger lifts, keep gliding with exponential
+	 *  decay and stop at the edges. Without it the view freezes the instant the
+	 *  finger stops, which feels harsh -- every native list decelerates. */
+	private startGlide() {
+		const s = this.velSamples;
+		if (s.length < 2) return;
+		const last = s[s.length - 1];
+		let first = s[0];
+		for (let i = s.length - 1; i >= 0; i--) {
+			if (last.t - s[i].t <= 90) first = s[i]; else break;   // last 90ms only, so a slow approach does not dilute the flick
+		}
+		const dt = last.t - first.t;
+		if (dt < 8) return;
+		// screen px/ms -> page units/ms; the pan runs opposite to the finger
+		let vx = -(last.x - first.x) / dt / this.scale;
+		let vy = -(last.y - first.y) / dt / this.scale;
+		if (Math.hypot(vx, vy) < 0.03) return;
+
+		let prev = performance.now();
+		const step = () => {
+			const now = performance.now();
+			const d = Math.min(now - prev, 48);   // on a dropped frame, do not lurch forward
+			prev = now;
+			const wantX = this.panX + vx * d, wantY = this.panY + vy * d;
+			this.panX = wantX; this.panY = wantY;
+			this.syncViewport();                  // clamps internally
+			if (Math.abs(this.panY - wantY) > 1e-6) vy = 0;   // hit an edge
+			if (Math.abs(this.panX - wantX) > 1e-6) vx = 0;
+			const decay = Math.pow(0.9975, d);    // glides to a stop in about a second, close to iOS
+			vx *= decay; vy *= decay;
+			if (Math.hypot(vx, vy) < 0.015) { this.glideRaf = 0; return; }
+			this.glideRaf = requestAnimationFrame(step);
+		};
+		this.glideRaf = requestAnimationFrame(step);
+	}
+
+	/** Pinch zoom: keep the page point under the pinch midpoint fixed */
+	private handlePinch() {
+		const [a, b] = [...this.touches.values()];
+		const d = Math.hypot(a.x - b.x, a.y - b.y);
+		const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+		if (!this.pinch) {
+			const p = this.toPage({ clientX: mx, clientY: my });
+			this.pinch = { d, cx: p.x, cy: p.y, zoom: this.zoom };
+			return;
+		}
+		this.setZoom(this.pinch.zoom * (d / this.pinch.d), this.pinch.cx, this.pinch.cy, mx, my);
+	}
+
+	/** Zoom to z, leaving page point (cx,cy) at screen coordinate (sx,sy). Never
+	 *  below 1: zoomed all the way out, the whole page is on screen. */
+	private setZoom(z: number, cx: number, cy: number, sx: number, sy: number) {
+		this.zoom = Math.min(Math.max(z, 1), ZOOM_MAX);
+		const r = this.live.getBoundingClientRect();
+		this.panX = cx - (sx - r.left) / this.scale;
+		this.panY = cy - (sy - r.top) / this.scale;
+		this.syncViewport();
+	}
+
+	/** Whole page, or page width when the whole page is already showing */
+	private fitPage() {
+		const w = this.widthZoom();
+		this.zoom = Math.abs(this.zoom - 1) < 1e-3 && w > 1 + 1e-3 ? w : 1;
+		this.syncViewport();
+	}
+
+	/* ============ Rounded input ============ */
+
+	private noteGrid(e: { clientX: number; clientY: number }) {
+		const g = this.grid;
+		const whole = (v: number) => Math.abs(v - Math.round(v)) < 1e-3;
+		g.n++;
+		if (whole(e.clientX) && whole(e.clientY)) g.whole++;
+		else if (whole(e.clientX * 2) && whole(e.clientY * 2)) g.half++;
+	}
+
+	/** Half the step the stroke in hand is rounded to, in page units, or 0
+	 *  when its positions are precise. See dequantize() in ink.ts. */
+	private halfStep(): number {
+		const g = this.grid;
+		let px = g.last;
+		if (g.n >= 6) px = g.whole >= g.n * 0.9 ? 1 : (g.whole + g.half) >= g.n * 0.9 ? 0.5 : 0;
+		return px / 2 / this.scale;
+	}
+
+	private eraseAt(x: number, y: number) {
+		this.eraserAt = { x, y };
+		const r = this.plugin.settings.eraserSize;
+		const before = this.strokes;
+		// Only strokes whose bounds meet the eraser circle can be affected
+		const near = (st: Stroke) => {
+			const b = bboxOf(st);
+			return b.x0 - r <= x && x <= b.x1 + r && b.y0 - r <= y && y <= b.y1 + r;
+		};
+		let after: Stroke[];
+		if (this.plugin.settings.eraserMode === "precise") {
+			after = [];
+			let changed = false;
+			for (const st of before) {
+				if (!near(st)) { after.push(st); continue; }
+				const parts = erasePrecise([st], x, y, r);
+				if (parts.length === 1 && parts[0] === st) { after.push(st); continue; }
+				changed = true;
+				after.push(...parts);
+			}
+			if (!changed) { this.redrawLive(); return; }
+		} else {
+			after = before.filter((st) => !(near(st) && hitStroke(st, x, y, r)));
+			if (after.length === before.length) { this.redrawLive(); return; }
+		}
+		this.strokes = after;
+		this.redrawAll();
+	}
+
+	private clearPage() {
+		this.settleRetract();
+		if (!this.strokes.length) return;
+		this.undoStack.push({ kind: "strokes-set", before: this.strokes });
+		this.strokes = [];
+		this.clearSelection();
+		this.redrawAll();
+	}
+
+	/* ============ Lasso ============ */
+
+	/** Membership is by intersection: a stroke only partly inside still
+	 *  belongs, so it moves or is deleted whole rather than being cut.
+	 *
+	 *  An empty ring is kept. Dropping it read as "the app decided my gesture
+	 *  did not count"; it stays, and dragging or deleting it simply has nothing
+	 *  to act on. A ring too small to mean anything is a stray touch, though. */
+	private finishLasso() {
+		const path = this.lasso ?? [];
+		this.lasso = null;
+		const box = polyBounds(path);
+		if (path.length < 8 || box.w < 12 || box.h < 12) { this.redrawLive(); return; }
+		this.sel = { path, strokes: this.strokes.filter((st) => strokeInPoly(st, path)), showOpts: false };
+		this.redrawLive();
+		this.rebuildOverlay();
+	}
+
+	private clearSelection() {
+		if (!this.sel) return;
+		this.sel = null;
+		this.redrawLive();
+		this.rebuildOverlay();
+	}
+
+	private moveSelection(dx: number, dy: number) {
+		if (!this.sel) return;
+		for (const pt of this.sel.path) { pt[0] += dx; pt[1] += dy; }
+		for (const st of this.sel.strokes) {
+			for (const p of st.pts) { p.x += dx; p.y += dy; }
+			// The point count is unchanged, so the cached bounds have to be told
+			strokeChanged(st);
+		}
+	}
+
+	private deleteSelection() {
+		if (!this.sel) return;
+		// An empty ring has nothing to delete, so deleting it just dismisses it
+		if (!this.sel.strokes.length) { this.clearSelection(); return; }
+		const before = this.strokes;
+		const gone = new Set(this.sel.strokes);
+		this.strokes = before.filter((st) => !gone.has(st));
+		this.undoStack.push({ kind: "strokes-set", before });
+		this.sel = null;
+		this.redrawAll();
+		this.rebuildOverlay();
+		new Notice(t("notice.strokesDeleted", gone.size));
+	}
+
+	private syncOverlayTransform() {
+		const s = this.scale;
+		this.overlay.style.transform =
+			`translate(${(-this.panX * s).toFixed(2)}px, ${(-this.panY * s).toFixed(2)}px) scale(${s})`;
+		// Floating UI cancels out the overall zoom, or buttons would turn into
+		// giants when the canvas is zoomed in
+		const k = (1 / s).toFixed(4);
+		for (const el of this.counterScaled) el.style.transform = `scale(${k})`;
+	}
+
+	/** The selection's delete button, at its top-right corner */
+	private rebuildOverlay() {
+		this.overlay.empty();
+		this.counterScaled = [];
+		if (this.sel?.showOpts) {
+			const box = polyBounds(this.sel.path);
+			const bar = this.overlay.createDiv({ attr: { style: S.selBar } });
+			bar.style.left = box.x + box.w + "px";
+			bar.style.top = box.y + "px";
+			this.counterScaled.push(bar);
+			const b = bar.createEl("button", { attr: { "aria-label": t("sel.delete"), title: t("sel.delete"), style: S.selBtn } });
+			drawIcon(b, "trash", 16);
+			b.addEventListener("pointerdown", (e) => e.stopPropagation());
+			b.addEventListener("click", (e) => { e.stopPropagation(); this.deleteSelection(); });
+		}
+		this.syncOverlayTransform();
+	}
+
+	/* ============ Undo ============ */
+
+	private undo() {
+		this.settleRetract();
+		const e = this.undoStack.pop();
+		if (!e) { new Notice(t("notice.nothingToUndo")); return; }
+		switch (e.kind) {
+			case "stroke-add": this.strokes.splice(e.index, 1); break;
+			case "strokes-set": this.strokes = e.before; break;
+			case "sel-move":
+				for (const st of e.strokes) {
+					for (const p of st.pts) { p.x -= e.dx; p.y -= e.dy; }
+					strokeChanged(st);
+				}
+				break;
+		}
+		// The ring no longer describes what is under it
+		this.clearSelection();
+		this.redrawAll();
+	}
+}
+
+/** Each finished stroke's outlines, straight and spline, each keyed on what it
+ *  was built from */
+const pathCache = new WeakMap<Stroke, Map<number, { key: string; path: Path2D | null }>>();
+
+function outline(st: Stroke, opt: InkOpts): Path2D | null {
+	const key = `${strokeRev(st)}:${st.pts.length}:${opt.smooth}:${opt.thin}:${opt.taper}:${opt.filter}:${st.s}`;
+	let slots = pathCache.get(st);
+	if (!slots) pathCache.set(st, slots = new Map());
+	let hit = slots.get(opt.curve);
+	if (!hit || hit.key !== key) slots.set(opt.curve, hit = { key, path: strokePath(st, opt) });
+	return hit.path;
+}
+
+const share = (k: number, n: number) => (n ? `${Math.round((100 * k) / n)}% of ${n}` : "none seen");
+
+/** Append to a sample buffer, keeping the most recent few thousand */
+function push(buf: number[], v: number) {
+	buf.push(v);
+	if (buf.length > 4000) buf.splice(0, buf.length - 4000);
+}
+
+/** p50 / p95 / max of a sample buffer, in milliseconds */
+function pct(v: number[]): string {
+	if (v.length < 10) return "write something first";
+	const s = [...v].sort((a, b) => a - b);
+	const at = (q: number) => s[Math.min(s.length - 1, Math.floor(s.length * q))];
+	return `${at(0.5).toFixed(1)} / ${at(0.95).toFixed(1)} / ${s[s.length - 1].toFixed(1)} ms`;
+}
+
+/** Stroke bounding box, cached on the stroke, used to cull ink outside the
+ *  viewport and to narrow the eraser's search */
+const bboxCache = new WeakMap<Stroke, { rev: number; n: number; box: { x0: number; x1: number; y0: number; y1: number } }>();
+function bboxOf(st: Stroke) {
+	const hit = bboxCache.get(st);
+	const rev = strokeRev(st), n = st.pts.length;
+	if (hit && hit.rev === rev && hit.n === n) return hit.box;
+	let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+	for (const p of st.pts) {
+		if (p.x < x0) x0 = p.x; if (p.x > x1) x1 = p.x;
+		if (p.y < y0) y0 = p.y; if (p.y > y1) y1 = p.y;
+	}
+	const box = {
+		x0: isFinite(x0) ? x0 : 0, x1: isFinite(x1) ? x1 : 0,
+		y0: isFinite(y0) ? y0 : 0, y1: isFinite(y1) ? y1 : 0,
+	};
+	bboxCache.set(st, { rev, n, box });
+	return box;
+}

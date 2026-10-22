@@ -1,9 +1,9 @@
 {
-  "id": "inklink",
-  "name": "Inklink",
-  "version": "0.16.0",
-  "minAppVersion": "1.5.0",
-  "description": "Handwriting that links. Lasso part of a page, name it, and reference it from anywhere as [[note#region]].",
+  "id": "inkdown",
+  "name": "Inkdown",
+  "version": "0.17.0",
+  "minAppVersion": "1.11.4",
+  "description": "Write by hand on a tablet and get Markdown at the cursor: text, LaTeX and Mermaid, read from your handwriting by Claude or another vision model.",
   "author": "lubenwei",
   "authorUrl": "https://github.com/StanH123h",
   "isDesktopOnly": false

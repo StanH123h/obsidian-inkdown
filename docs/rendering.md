@@ -73,3 +73,66 @@ instance (see Linebender/vello #49).
   stroker. Perfectly clean, but no pressure-driven width at all.
 - **Boolean union to an outline**: what Microsoft's Win2D does when it calls
   `Outline()` after `CanvasGeometry.CreateInk()`. Canvas 2D has no such API.
+
+## The spline, and why every point still gets its disc
+
+Since v0.16 the pad is a single page, so rendering can spend more per stroke.
+Two things that once kept a long notebook small are gone, because zoomed in
+they showed: finished strokes are no longer thinned, and no longer rounded to a
+tenth of a unit (half a pixel of wobble along every edge at maximum zoom).
+
+Zoomed in, a centripetal Catmull-Rom spline is drawn through the samples
+instead of straight lines between them. It subdivides by how much the curve
+turns, not by distance, so straight stretches cost nothing extra; the bend
+estimate adds the turn on the way out of a sample to the turn on the way in,
+because comparing the two end tangents alone misses an S-bend. On noisy input
+the worst corner at maximum zoom drops from 1.5-2.9px to under 0.5px
+(`test/ink.test.js`).
+
+Zoomed out it is not drawn at all: at about 1.4 device pixels per unit a 240Hz
+polyline is already as fine as the screen, and the spline costs about three
+times as much (`SPLINE_FROM`). Both outlines are built once, when the pen lifts.
+
+**Wedges instead of discs do not work.** To save the arcs, the joints between
+spline points were closed with the exact wedge triangle instead of a disc. The
+geometry was right, and a rasterised crack test still found half-covered pixels
+in the middle of strokes: in Chrome, where two subpaths of one path meet edge
+to edge, a pixel on the seam can come out half covered. A disc overlaps the
+seam and no rasteriser can leave it open. `npm run test:pad` renders noisy
+strokes at 10px per unit and checks every interior pixel is solid; it caught
+this, where the geometry checks could not.
+
+## Input rounded to whole pixels
+
+An iPad screenshot showed a nearly vertical line drawn as a staircase: long
+straight runs, then a step sideways, at regular intervals. Rendering cannot fix
+that; the samples themselves are the staircase. The positions arrive rounded to
+whole CSS pixels, so a slightly slanted line keeps its x for a dozen samples
+and then jumps. Thin pens and the small landscape page (about 2 units per
+pixel) made it obvious. `npm run test:pad` with `ONLY=stairs` reproduces it.
+
+The pad counts, per stroke, how many samples land on whole (or half) pixels;
+when nine in ten do, the stroke carries `q`, half the rounding step in page
+units, and `dequantize()` reconstructs it before anything else runs:
+
+1. Per axis, anchors: where the rounded value steps from one pixel to the next,
+   the true value crossed the half-pixel line right there; where it turns back,
+   the turn is in the middle of that run. A monotone cubic through the anchors,
+   parameterised by sample time.
+2. One fit over the whole stroke: the path that bends least while staying near
+   that estimate and inside every sample's rounding box (a Whittaker smoother,
+   with the boxes enforced by ADMM).
+
+Measured on rounded synthetic strokes (`test/ink.test.js`), the extra turning
+the staircase adds drops from hundreds or thousands of degrees to a few, and
+every stroke ends up closer to the true path than its rounded samples were.
+
+Approaches that failed, so they are not tried again:
+
+- A Gaussian, then clamping each point back into its box, repeated: shrinks
+  every curve onto the inner edge of its boxes, worse than the staircase.
+- Anchors joined piecewise-linearly: curves stay faintly polygonal.
+- The whole-stroke fit with points pinned to their box edge and re-solved:
+  a pin set while the curve is still far off is never released, and the
+  result zig-zags. ADMM does not have that problem.
+- Too much smoothing in the fit (lambda 600 and up): rounds off a 横折.
