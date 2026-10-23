@@ -38,14 +38,13 @@ jobs:
 
       - run: npm run build
 
-      # --prerelease marks this a beta. Drop the flag for the first stable
-      # release; the community plugin installer looks for a full release.
+      # A full release, not a pre-release: the community directory and the
+      # plugin installer only look at full releases
       - name: Publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --prerelease \
-            --notes "Beta release. See the README for status and known limitations." \
+            --notes "See the README for status and known limitations." \
             main.js manifest.json

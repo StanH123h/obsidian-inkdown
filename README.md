@@ -15,10 +15,10 @@ own, however carefully designed, sits outside all of that. Here handwriting is
 only a way of typing: what reaches the vault is exactly what you would have
 typed, had typing maths on a tablet not been so slow.
 
-## Status: beta
+## Status
 
-Used daily on one iPad with an Apple Pencil; not yet through Obsidian's
-community plugin review. Expect the interface to keep moving.
+Used daily on one iPad with an Apple Pencil. Expect the interface to keep
+moving.
 
 | | |
 |---|---|
@@ -90,15 +90,10 @@ With Claude Opus 5.5 a conversion costs on the order of one to three US cents;
 Haiku is far cheaper and quicker, at some cost in accuracy on untidy writing.
 Requests go to the provider directly with your own key.
 
-## Installing the beta
+## Installing
 
-It is not in the community plugin list yet, so install it with
-[BRAT](https://github.com/TfTHacker/obsidian42-brat):
-
-1. Install **BRAT** from Settings -> Community plugins.
-2. Run the command *BRAT: Add a beta plugin for testing* and paste this
-   repository's path, `StanH123h/obsidian-inkdown`.
-3. Enable **Inkdown** under Community plugins.
+In Obsidian, open Settings -> Community plugins -> Browse, search for
+**Inkdown**, then install and enable it.
 
 To install by hand instead, take `main.js` and `manifest.json` from a
 [release](../../releases) and drop them in
