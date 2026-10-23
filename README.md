@@ -26,14 +26,29 @@ command *Handwrite at the cursor*.
 
 ### Mistakes are flagged, never fixed
 
+What you wrote stays as you wrote it; a warning under it says what looks wrong
+and why.
+
 ![(a + b)² = a² + b², transcribed as written, with a warning that the cross term 2ab is missing](https://raw.githubusercontent.com/StanH123h/obsidian-inkdown/main/docs/images/check.png)
 
-### The AI pen talks to the AI
+### Two pens: one for your content, one for talking to the AI
 
-Write in violet to ask for a table, say what to skip, or ask a question. It is
-never transcribed.
+![The pad's tool bar has two pens: the Pen, for content the AI transcribes, and the AI pen, for instructions and questions written to the AI, never transcribed](https://raw.githubusercontent.com/StanH123h/obsidian-inkdown/main/docs/images/two-pens.png)
 
-![A row of values with "make this a table" written under it in violet, and the Markdown table it became](https://raw.githubusercontent.com/StanH123h/obsidian-inkdown/main/docs/images/ai-pen.png)
+What you write with the **Pen** is your content, and the AI transcribes it.
+What you write with the **AI pen** (violet) the AI knows is written to it, so
+you can annotate the page freely and none of it is mistaken for your content.
+There are two ways to use it.
+
+**Tell it what to do with what you wrote**, such as "make this a table",
+"skip this" or "this symbol is ξ":
+
+![Values with "make this a table" written under them with the AI pen, and the Markdown table they became](https://raw.githubusercontent.com/StanH123h/obsidian-inkdown/main/docs/images/ai-pen.png)
+
+**Ask a question on the side**: write "btw, ..." and the answer comes back in
+a callout under the result.
+
+![f(x) = (x − 2)² − 1, with "btw, why does this mean the minimum is −1?" written with the AI pen; the note gets the formula, and the answer in a callout under it](https://raw.githubusercontent.com/StanH123h/obsidian-inkdown/main/docs/images/question.png)
 
 ## Setting up
 
