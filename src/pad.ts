@@ -310,7 +310,7 @@ export class InkPad extends Modal {
 		// has no room for it; the diagnostics command reports it too.
 		if (!this.narrow) {
 			const v = bar.createDiv({ text: "v" + __HW_VERSION__, attr: { style: S.version } });
-			v.createDiv({ text: __HW_BUILD__ });
+			if (__HW_BUILD__) v.createDiv({ text: __HW_BUILD__ });
 		}
 
 		this.syncTools = () => {

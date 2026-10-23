@@ -1,6 +1,6 @@
 import esbuild from "esbuild";
-import builtins from "builtin-modules";
 import fs from "fs";
+import { builtinModules } from "module";
 import path from "path";
 
 // Print the version on every build and refuse to build when the two files
@@ -41,7 +41,7 @@ const production = process.argv[2] === "production";
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
-  external: ["obsidian", "electron", ...builtins],
+  external: ["obsidian", "electron", ...builtinModules],
   format: "cjs",
   target: "es2020",
   logLevel: "info",
@@ -51,11 +51,14 @@ const context = await esbuild.context({
   // Bake the version into the bundle. The toolbar badge then reports which
   // main.js is loaded, rather than what manifest.json says -- the two are
   // separate files and a sync service can deliver them at different times.
-  // The build time goes in too: between releases the version stays put, and
-  // this is what tells one deployed build from the next.
+  // Builds deployed to a test vault get the build time too: between releases
+  // the version stays put, and this is what tells one deployed build from the
+  // next. A release build leaves it out, so building the same commit always
+  // gives the same main.js -- the community directory rebuilds each release
+  // from source and checks that it matches the one attached.
   define: {
     __HW_VERSION__: JSON.stringify(manifest.version),
-    __HW_BUILD__: JSON.stringify(new Date().toLocaleString("sv-SE", { hour12: false }).slice(5, 16)),
+    __HW_BUILD__: JSON.stringify(targets.length ? new Date().toLocaleString("sv-SE", { hour12: false }).slice(5, 16) : ""),
   },
   minify: production,
   plugins: [deploy],

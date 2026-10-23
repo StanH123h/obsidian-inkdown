@@ -1,13 +1,14 @@
 /* Two languages: English and Chinese.
  *
- * Which one is used follows the user's Obsidian display language, falling back
- * to the browser locale, and anything that is not Chinese gets English. The
- * setting can also pin one explicitly.
+ * Which one is used follows the user's Obsidian display language, and anything
+ * that is not Chinese gets English. The setting can also pin one explicitly.
  *
  * Not translated on purpose: the diagnostics panel, which is a debugging tool
  * rather than a feature. The prompt sent to the model is English either way;
  * it tells the model to keep whatever language the handwriting is in.
  */
+
+import { getLanguage } from "obsidian";
 
 export type Lang = "en" | "zh";
 
@@ -105,13 +106,10 @@ let lang: Lang = "en";
 export function setLang(l: Lang) { lang = l; }
 export function getLang(): Lang { return lang; }
 
-/** Resolve the "auto" setting: Obsidian's display language first, then the
- *  browser locale. Anything that is not Chinese gets English. */
+/** Resolve the "auto" setting: Obsidian's display language, which is English
+ *  until one is chosen. Anything that is not Chinese gets English. */
 export function detectLang(): Lang {
-	let tag = "";
-	try { tag = window.localStorage?.getItem("language") ?? ""; } catch { /* private mode */ }
-	if (!tag) tag = navigator.language ?? "";
-	return /^zh/i.test(tag) ? "zh" : "en";
+	return /^zh/i.test(getLanguage()) ? "zh" : "en";
 }
 
 export function t(key: Key, ...args: (string | number)[]): string {

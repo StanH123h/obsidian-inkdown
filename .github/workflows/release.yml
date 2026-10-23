@@ -13,6 +13,9 @@ on:
 
 permissions:
   contents: write
+  # For the attestation: a signing token, and somewhere to store the record
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -37,6 +40,13 @@ jobs:
       - run: npm test
 
       - run: npm run build
+
+      # A signed record that main.js was built here, from this commit. Anyone
+      # can check one they downloaded with
+      #   gh attestation verify main.js -R StanH123h/obsidian-inkdown
+      - uses: actions/attest@v4
+        with:
+          subject-path: main.js
 
       # A full release, not a pre-release: the community directory and the
       # plugin installer only look at full releases

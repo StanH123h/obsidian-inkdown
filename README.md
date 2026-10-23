@@ -75,7 +75,9 @@ converts needs the key once.
 - **Convert** (Cmd+Enter on desktop) sends the page off and closes the pad. The
   note stays usable meanwhile: keep typing, switch notes, even close it -- the
   result goes wherever the placeholder has got to. If you deleted the
-  placeholder, the result is shown in a window to copy instead of being lost.
+  placeholder, the result is shown in a window to copy instead of being lost;
+  its Copy button is the only place the plugin touches the clipboard, and it
+  only writes to it.
 
 ## What is sent, and what it costs
 
@@ -108,9 +110,8 @@ this version no longer draws it.
 
 ## Languages
 
-English and Chinese, following Obsidian's display language, falling back to
-the browser locale; anything that is not Chinese gets English. The setting can
-also pin one. The diagnostics panel is deliberately left in English. The prompt
+English and Chinese, following Obsidian's display language; anything that is
+not Chinese gets English. The setting can also pin one. The diagnostics panel is deliberately left in English. The prompt
 sent to the model is English either way and tells it to keep the language the
 handwriting is in.
 

@@ -303,7 +303,7 @@ export default class HandwritingPlugin extends Plugin {
 		const s = this.settings;
 		const secret = s.provider === "openai" ? s.openaiSecret : s.anthropicSecret;
 		const out: Record<string, string> = {
-			"plugin version": `${this.manifest.version}, built ${__HW_BUILD__}`,
+			"plugin version": __HW_BUILD__ ? `${this.manifest.version}, built ${__HW_BUILD__}` : this.manifest.version,
 			"platform": Platform.isMobile ? (Platform.isPhone ? "phone" : "tablet") : "desktop",
 			"viewport": `${window.innerWidth} x ${window.innerHeight} @${window.devicePixelRatio}x`,
 			"service": s.provider === "openai" ? `openai-compatible, ${s.openaiBaseUrl}` : "anthropic",

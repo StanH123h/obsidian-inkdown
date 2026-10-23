@@ -7,6 +7,7 @@ const state = globalThis.__hwStub ??= { calls: [], respond: () => { throw new Er
 
 module.exports = {
   calls: state.calls,
+  getLanguage: () => 'en',
   setResponder(fn) { state.respond = fn; state.calls.length = 0; },
   async requestUrl(req) {
     state.calls.push(req);
