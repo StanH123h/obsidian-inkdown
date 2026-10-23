@@ -5,7 +5,7 @@ import {
 	CLAUDE_MODELS, CONTEXT_AFTER, CONTEXT_BEFORE, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL, Engine, IMAGE_EDGE,
 	Figure, Provider, Surroundings, cursorAfter, fitInsertion, placeFigures, recognize,
 } from "./transcribe";
-import { Lang, detectLang, setLang, t } from "./i18n";
+import { detectLang, setLang, t } from "./i18n";
 import { SIZE_MAX, SIZE_MIN } from "./dial";
 
 /** Injected by esbuild at build time; see esbuild.config.mjs */
@@ -324,11 +324,12 @@ export default class HandwritingPlugin extends Plugin {
 	/** "auto" follows Obsidian's display language; anything not Chinese gets English */
 	applyLang() {
 		const l = this.settings.language;
-		setLang(l === "en" || l === "zh" ? (l as Lang) : detectLang());
+		setLang(l === "en" || l === "zh" ? l : detectLang());
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		const stored = (await this.loadData()) as Partial<HandwritingSettings> | null;
+		this.settings = { ...DEFAULT_SETTINGS, ...stored };
 		// Copy the array rather than sharing DEFAULT_SETTINGS' one, which editing a
 		// width would otherwise mutate. Also guard against a damaged data.json.
 		const s = this.settings;

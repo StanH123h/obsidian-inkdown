@@ -174,17 +174,17 @@ export class InkPad extends Modal {
 			isEraser: () => this.tool === "eraser",
 			toggleEraser: () => this.setTool(this.tool === "eraser" ? this.lastPen : "eraser"),
 			getMode: () => this.plugin.settings.eraserMode,
-			setMode: (v) => { this.plugin.settings.eraserMode = v; this.plugin.saveSettings(); },
+			setMode: (v) => { this.plugin.settings.eraserMode = v; void this.plugin.saveSettings(); },
 			getSize: () => this.plugin.settings.eraserSize,
 			setSize: (v, done) => {
 				this.plugin.settings.eraserSize = v;
-				if (done) this.plugin.saveSettings();
+				if (done) void this.plugin.saveSettings();
 			},
 			scale: () => this.scale,
 			moved: (x, y, done) => {
 				this.plugin.settings.dialX = x;
 				this.plugin.settings.dialY = y;
-				if (done) this.plugin.saveSettings();
+				if (done) void this.plugin.saveSettings();
 			},
 		});
 		this.bctx = this.base.getContext("2d")!;
@@ -212,8 +212,8 @@ export class InkPad extends Modal {
 
 	onClose() {
 		this.ro?.disconnect();
-		if (this.paintReq != null) cancelAnimationFrame(this.paintReq);
-		cancelAnimationFrame(this.retractRaf);
+		if (this.paintReq != null) window.cancelAnimationFrame(this.paintReq);
+		window.cancelAnimationFrame(this.retractRaf);
 		this.stopGlide();
 		this.plugin.padReport = this.report();
 		this.modalEl.empty();
@@ -342,13 +342,8 @@ export class InkPad extends Modal {
 	 *  -- so a hardcoded offset would overlap it or leave a gap. */
 	private placeCtxBar() {
 		if (!this.ctxBar.isConnected) return;
-		if (this.narrow) {
-			this.ctxBar.style.bottom = this.tools.offsetHeight + "px";
-			this.ctxBar.style.right = "";
-		} else {
-			this.ctxBar.style.right = this.tools.offsetWidth + "px";
-			this.ctxBar.style.bottom = "";
-		}
+		if (this.narrow) this.ctxBar.setCssProps({ bottom: this.tools.offsetHeight + "px", right: "" });
+		else this.ctxBar.setCssProps({ right: this.tools.offsetWidth + "px", bottom: "" });
 	}
 
 	private buildContextBar() {
@@ -386,7 +381,7 @@ export class InkPad extends Modal {
 				dots[this.sizeIdx].setAttribute("style", S.dot(dotPx(v)));
 				btns[this.sizeIdx].setAttribute("aria-label", t("ctx.penWidth", v));
 			},
-			() => this.plugin.saveSettings());
+			() => { void this.plugin.saveSettings(); });
 
 		const sync = () => {
 			btns.forEach((b, i) => b.setAttribute("style", i === this.sizeIdx ? S.btnOn : S.btn));
@@ -582,7 +577,7 @@ export class InkPad extends Modal {
 	 *  Nothing reads the canvas back, so deferring a frame is safe everywhere. */
 	private redrawAll() {
 		if (this.paintReq != null) return;
-		this.paintReq = requestAnimationFrame(() => { this.paintReq = null; this.paintAll(); });
+		this.paintReq = window.requestAnimationFrame(() => { this.paintReq = null; this.paintAll(); });
 	}
 
 	private paintAll() {
@@ -682,14 +677,14 @@ export class InkPad extends Modal {
 			r.reach -= 0.25;
 			if (r.reach <= 1e-6) { this.settleRetract(); return; }
 			this.redrawLive();
-			this.retractRaf = requestAnimationFrame(step);
+			this.retractRaf = window.requestAnimationFrame(step);
 		};
-		this.retractRaf = requestAnimationFrame(step);
+		this.retractRaf = window.requestAnimationFrame(step);
 	}
 
 	/** Put a shrinking stroke on the page now, as it will end up */
 	private settleRetract() {
-		cancelAnimationFrame(this.retractRaf);
+		window.cancelAnimationFrame(this.retractRaf);
 		const r = this.retract;
 		if (!r) return;
 		this.retract = null;
@@ -972,7 +967,7 @@ export class InkPad extends Modal {
 	}
 
 	private stopGlide() {
-		if (this.glideRaf) { cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
+		if (this.glideRaf) { window.cancelAnimationFrame(this.glideRaf); this.glideRaf = 0; }
 	}
 
 	/** Inertial scrolling: after the finger lifts, keep gliding with exponential
@@ -1006,9 +1001,9 @@ export class InkPad extends Modal {
 			const decay = Math.pow(0.9975, d);    // glides to a stop in about a second, close to iOS
 			vx *= decay; vy *= decay;
 			if (Math.hypot(vx, vy) < 0.015) { this.glideRaf = 0; return; }
-			this.glideRaf = requestAnimationFrame(step);
+			this.glideRaf = window.requestAnimationFrame(step);
 		};
-		this.glideRaf = requestAnimationFrame(step);
+		this.glideRaf = window.requestAnimationFrame(step);
 	}
 
 	/** Pinch zoom: keep the page point under the pinch midpoint fixed */
@@ -1204,7 +1199,7 @@ const pathCache = new WeakMap<Stroke, Map<number, { key: string; path: Path2D | 
 function outline(st: Stroke, opt: InkOpts): Path2D | null {
 	const key = `${strokeRev(st)}:${st.pts.length}:${opt.smooth}:${opt.thin}:${opt.taper}:${opt.filter}:${st.s}`;
 	let slots = pathCache.get(st);
-	if (!slots) pathCache.set(st, slots = new Map());
+	if (!slots) pathCache.set(st, slots = new Map<number, { key: string; path: Path2D | null }>());
 	let hit = slots.get(opt.curve);
 	if (!hit || hit.key !== key) slots.set(opt.curve, hit = { key, path: strokePath(st, opt) });
 	return hit.path;

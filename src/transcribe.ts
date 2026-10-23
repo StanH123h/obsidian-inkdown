@@ -130,8 +130,8 @@ const system = (e: Pick<Engine, "figures" | "check">, tool: boolean, notes = fal
  *  behind it is dropped, along with its line if it had one of its own. */
 export function placeFigures(md: string, embeds: Map<string, string>): string {
 	const used = new Set<string>();
-	let out = md.replace(/^[ \t]*\{\{figure:([^}\n]+)\}\}[ \t]*$\n?|\{\{figure:([^}\n]+)\}\}/gm, (whole, own, inline) => {
-		const name = (own ?? inline).trim();
+	let out = md.replace(/^[ \t]*\{\{figure:([^}\n]+)\}\}[ \t]*$\n?|\{\{figure:([^}\n]+)\}\}/gm, (whole: string, own: string | undefined, inline: string | undefined) => {
+		const name = (own ?? inline ?? "").trim();
 		const embed = embeds.get(name);
 		if (!embed) return "";
 		used.add(name);
@@ -352,6 +352,15 @@ function explain(err: unknown): unknown {
 
 /* ============ OpenAI and compatible services ============ */
 
+/** The parts of a Chat Completions reply read here, all optional: a
+ *  compatible service may leave any of them out */
+interface ChatReply {
+	model?: string;
+	error?: { message?: string };
+	choices?: { finish_reason?: string; message?: { content?: unknown } }[];
+	usage?: { prompt_tokens?: number; completion_tokens?: number };
+}
+
 /** Chat Completions rather than the newer Responses API: it is the shape every
  *  OpenAI-compatible service implements, which is the point of offering this. */
 async function viaOpenAI(png: string, text: string, e: Engine, notes: boolean): Promise<Reading> {
@@ -381,8 +390,8 @@ async function viaOpenAI(png: string, text: string, e: Engine, notes: boolean): 
 	} catch (err) {
 		throw new RecognitionError(t("err.network", (err as Error)?.message ?? String(err)));
 	}
-	let body: any = null;
-	try { body = JSON.parse(res.text); } catch { /* not JSON: report the status */ }
+	let body: ChatReply | null = null;
+	try { body = JSON.parse(res.text) as ChatReply; } catch { /* not JSON: report the status */ }
 	if (res.status === 401) throw new RecognitionError(t("err.auth"));
 	if (res.status === 429) throw new RecognitionError(t("err.rate"));
 	if (res.status >= 400) {

@@ -360,7 +360,7 @@ function destep(v: number[], t: Float64Array, h: number): number[] {
 	// never overshoots an anchor: where the axis turns back the slope is zero
 	// and the turn stays exactly where the staircase put it.
 	const m = at.length;
-	const d: number[] = [], slope: number[] = new Array(m).fill(0);
+	const d: number[] = [], slope: number[] = new Array<number>(m).fill(0);
 	for (let k = 0; k < m - 1; k++) {
 		const span = at[k + 1] - at[k];
 		d.push(span > 1e-12 ? (val[k + 1] - val[k]) / span : 0);

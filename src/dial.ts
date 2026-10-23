@@ -275,7 +275,7 @@ export function buildEraserDial(parent: HTMLElement, host: DialHost): Dial {
 		const d = Math.min(host.getSize() * 2 * host.scale(), 140);
 		preview.style.width = d + "px";
 		preview.style.height = d + "px";
-		preview.style.opacity = "1";
+		preview.setCssProps({ opacity: "1" });
 	};
 
 	const applyAngle = (deg: number) => {
@@ -339,7 +339,7 @@ export function buildEraserDial(parent: HTMLElement, host: DialHost): Dial {
 			const r = wrap.getBoundingClientRect();
 			if (Math.hypot(x - (r.left - pr.left), y - (r.top - pr.top)) < DEAD) return;
 			dragging = true;
-			wrap.style.opacity = ".75";
+			wrap.setCssProps({ opacity: ".75" });
 		}
 		const at2 = place(x, y, { w: pr.width, h: pr.height });
 		host.moved(at2.x, at2.y, false);
@@ -347,7 +347,7 @@ export function buildEraserDial(parent: HTMLElement, host: DialHost): Dial {
 
 	const release = (e: PointerEvent) => {
 		if (grab === "disc") {
-			wrap.style.opacity = "";
+			wrap.setCssProps({ opacity: "" });
 			if (dragging) {
 				const r = wrap.getBoundingClientRect();
 				const pr = wrap.parentElement?.getBoundingClientRect();
@@ -359,7 +359,7 @@ export function buildEraserDial(parent: HTMLElement, host: DialHost): Dial {
 			}
 		} else if (grab === "slider") {
 			host.setSize(host.getSize(), true);
-			preview.style.opacity = "0";
+			preview.setCssProps({ opacity: "0" });
 		}
 		grab = null;
 		hold = null;
@@ -368,8 +368,8 @@ export function buildEraserDial(parent: HTMLElement, host: DialHost): Dial {
 	};
 	svg.addEventListener("pointerup", release);
 	svg.addEventListener("pointercancel", (e) => {
-		if (grab === "slider") preview.style.opacity = "0";
-		wrap.style.opacity = "";
+		if (grab === "slider") preview.setCssProps({ opacity: "0" });
+		wrap.setCssProps({ opacity: "" });
 		grab = null;
 		hold = null;
 		dragging = false;
