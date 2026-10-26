@@ -1,4 +1,4 @@
-import { InkPad } from "../../src/pad";
+import { PadModal } from "../../src/pad";
 import { InkOpts, Stroke, build, drawStroke, rasterize } from "../../src/ink";
 
 const settings = {
@@ -14,8 +14,10 @@ const plugin = {
 const w = window as any;
 w.openPad = (strokes: unknown[] = []) => {
 	w.__exit = null;
-	w.__pad = new InkPad({} as any, plugin as any, strokes as any, (x) => { w.__exit = x; });
-	w.__pad.open();
+	const modal = new PadModal({} as any, plugin as any, strokes as any, (x) => { w.__exit = x; });
+	modal.open();
+	// The pad itself, not its host: the tests read its state directly
+	w.__pad = modal.pad;
 };
 w.settings = settings;
 w.rasterize = (strokes: any[]) => rasterize(strokes, plugin.opts(), 1568)?.toDataURL("image/png") ?? null;

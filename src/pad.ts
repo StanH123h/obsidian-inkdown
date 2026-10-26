@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, Modal, Notice, Scope } from "obsidian";
 import {
 	InkOpts, NOTE_INK, PAGE_H, PAGE_W, SPLINE_FROM, Stroke,
 	drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
@@ -37,15 +37,63 @@ type UndoEntry =
  *  any other way keeps the writing for next time. */
 export interface PadExit { strokes: Stroke[]; convert: boolean }
 
-/** One sheet of paper over the whole screen.
+/** What the pad needs from whatever it is shown in */
+export interface PadHost {
+	/** Where the pad's keyboard shortcuts go */
+	scope: Scope;
+	/** The tool bar's close button */
+	close(): void;
+	/** The convert button, once the page has something on it and there is a
+	 *  key to convert it with */
+	convert(): void;
+}
+
+/** The pad over the whole screen. Closing it, with the close button or Esc,
+ *  keeps the page as a draft; converting closes it and hands the page over. */
+export class PadModal extends Modal {
+	readonly pad: InkPad;
+	private converting = false;
+
+	constructor(
+		app: App,
+		plugin: HandwritingPlugin,
+		strokes: Stroke[],
+		private onExit: (exit: PadExit) => void,
+	) {
+		super(app);
+		this.pad = new InkPad(plugin, strokes, {
+			scope: this.scope,
+			close: () => this.close(),
+			convert: () => { this.converting = true; this.close(); },
+		});
+	}
+
+	onOpen() {
+		const m = this.modalEl;
+		// The stock close button and title bar go: the tool bar has its own close
+		m.empty();
+		for (const [k, v] of Object.entries(MODAL)) m.style.setProperty(k, v, "important");
+		// A focused note behind the pad would keep the on-screen keyboard up,
+		// covering half the page
+		(document.activeElement as HTMLElement | null)?.blur?.();
+		this.pad.mount(m);
+	}
+
+	onClose() {
+		const strokes = this.pad.unmount();
+		this.onExit({ strokes, convert: this.converting });
+	}
+}
+
+/** One sheet of paper, shown in whatever hosts it (see PadHost).
  *
- *  Not a document and not a view: it holds a page of ink until the user either
- *  converts it, which hands the strokes to the plugin to be read, or closes it,
- *  which keeps them as a draft. Nothing here touches the vault.
+ *  Not a document: it holds a page of ink until the user either converts it,
+ *  which hands the strokes to the plugin to be read, or closes it, which keeps
+ *  them as a draft. Nothing here touches the vault.
  *
  *  The page is a fixed A4 sheet. Zoomed all the way out the whole of it fits
  *  on screen; zoomed in, a finger pans it in either direction. */
-export class InkPad extends Modal {
+export class InkPad {
 	private root!: HTMLDivElement;
 	private surface!: HTMLDivElement;
 	private base!: HTMLCanvasElement;
@@ -64,7 +112,6 @@ export class InkPad extends Modal {
 	private desk = "";
 
 	private strokes: Stroke[];
-	private convert = false;
 	private cur: Stroke | null = null;
 	private lasso: [number, number][] | null = null;
 	private drawing = false;
@@ -136,27 +183,19 @@ export class InkPad extends Modal {
 	private placed = false;
 
 	constructor(
-		app: App,
 		private plugin: HandwritingPlugin,
 		strokes: Stroke[],
-		private onExit: (exit: PadExit) => void,
+		private host: PadHost,
 	) {
-		super(app);
 		this.strokes = strokes;
 	}
 
 	/* ============ Lifecycle ============ */
 
-	onOpen() {
-		const m = this.modalEl;
-		// The stock close button and title bar go: the tool bar has its own close
-		m.empty();
-		for (const [k, v] of Object.entries(MODAL)) m.style.setProperty(k, v, "important");
-		// A focused note behind the pad would keep the on-screen keyboard up,
-		// covering half the page
-		(document.activeElement as HTMLElement | null)?.blur?.();
-
-		const root = this.root = m.createDiv();
+	/** Build the pad inside `parent`, which must already be in the document:
+	 *  the desk colour is read from the theme, and the canvas sized to fit */
+	mount(parent: HTMLElement) {
+		const root = this.root = parent.createDiv();
 		// Obsidian's mobile edge swipes walk up from the touch target looking for
 		// this flag, the same opt-out its own sliders use. Without it a finger on
 		// the dial or either bar can open a sidebar mid-gesture.
@@ -200,8 +239,8 @@ export class InkPad extends Modal {
 		this.applyLayout();   // the first call always builds both bars
 		this.bindPointer();
 
-		this.scope.register(["Mod"], "z", () => { this.undo(); return false; });
-		this.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; });
+		this.host.scope.register(["Mod"], "z", () => { this.undo(); return false; });
+		this.host.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; });
 
 		this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
 		this.ro.observe(root);         // decides the narrow layout
@@ -210,14 +249,15 @@ export class InkPad extends Modal {
 		this.resize();
 	}
 
-	onClose() {
+	/** Take the pad down and hand back what is on the page */
+	unmount(): Stroke[] {
 		this.ro?.disconnect();
 		if (this.paintReq != null) window.cancelAnimationFrame(this.paintReq);
 		window.cancelAnimationFrame(this.retractRaf);
 		this.stopGlide();
 		this.plugin.padReport = this.report();
-		this.modalEl.empty();
-		this.onExit({ strokes: this.strokes, convert: this.convert });
+		this.root.remove();
+		return this.strokes;
 	}
 
 	private report(): Record<string, string> {
@@ -245,8 +285,7 @@ export class InkPad extends Modal {
 		if (!this.strokes.length) { new Notice(t("notice.empty")); return; }
 		const problem = this.plugin.convertBlocker();
 		if (problem) { new Notice(problem); return; }
-		this.convert = true;
-		this.close();
+		this.host.convert();
 	}
 
 	private applyLayout() {
@@ -285,7 +324,7 @@ export class InkPad extends Modal {
 		};
 		const sep = () => bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } });
 
-		btn("close", t("tool.close"), () => this.close());
+		btn("close", t("tool.close"), () => this.host.close());
 		sep();
 		const penBtn = btn("pen", t("tool.pen"), () => this.setTool("pen"));
 		const aiBtn = btn("pen", t("tool.aiPen"), () => this.setTool("ai"));

@@ -1,5 +1,5 @@
 import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, SecretComponent, Setting, TFile } from "obsidian";
-import { InkPad } from "./pad";
+import { PadModal } from "./pad";
 import { InkOpts, Stroke, rasterize } from "./ink";
 import {
 	CLAUDE_MODELS, CONTEXT_AFTER, CONTEXT_BEFORE, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL, Engine, IMAGE_EDGE,
@@ -154,7 +154,7 @@ export default class HandwritingPlugin extends Plugin {
 		if (!file) { new Notice(t("notice.noNote")); return; }
 		const strokes = this.draft;
 		this.draft = [];
-		new InkPad(this.app, this, strokes, (exit) => {
+		new PadModal(this.app, this, strokes, (exit) => {
 			if (exit.convert) void this.convert(view, file, exit.strokes);
 			else this.draft = exit.strokes;
 		}).open();
