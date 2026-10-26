@@ -1,0 +1,24 @@
+name: Feature request
+description: An idea, or something that would make Inkdown fit the way you write.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: English or Chinese are both fine (中文也可以).
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation and what gets in the way. This helps more than a finished solution.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: If you have an idea of how it could work.
+  - type: input
+    id: device
+    attributes:
+      label: What you write on
+      placeholder: iPad with Apple Pencil
