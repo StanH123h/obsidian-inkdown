@@ -1,4 +1,4 @@
-import { App, Modal, Notice } from "obsidian";
+import { App, KeymapEventHandler, Modal, Notice, Scope } from "obsidian";
 import {
 	InkOpts, NOTE_INK, PAGE_H, PAGE_W, SPLINE_FROM, Stroke,
 	drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
@@ -37,15 +37,72 @@ type UndoEntry =
  *  any other way keeps the writing for next time. */
 export interface PadExit { strokes: Stroke[]; convert: boolean }
 
-/** One sheet of paper over the whole screen.
+/** How the pad is shown: over the whole screen, or in a pane beside the note */
+export type PadMode = "full" | "split";
+
+/** What the pad needs from whatever it is shown in */
+export interface PadHost {
+	/** Where the pad's keyboard shortcuts go */
+	scope: Scope;
+	/** The tool bar's close button */
+	close(): void;
+	/** The convert button, once the page has something on it and there is a
+	 *  key to convert it with */
+	convert(): void;
+	/** The button that moves the pad, page and all, to the other way of being
+	 *  shown. Left out where there is no other way: a phone has no split view. */
+	swap?: { to: PadMode; go(): void };
+}
+
+/** The pad over the whole screen. Closing it, with the close button or Esc,
+ *  keeps the page as a draft; converting closes it and hands the page over;
+ *  swapping closes it and hands the pad itself on, to be shown in a pane. */
+export class PadModal extends Modal {
+	private converting = false;
+	private swapping = false;
+
+	constructor(
+		app: App,
+		readonly pad: InkPad,
+		private onExit: (exit: PadExit) => void,
+		/** Absent where there is no split view */
+		private onSwap?: () => void,
+	) {
+		super(app);
+	}
+
+	onOpen() {
+		const m = this.modalEl;
+		// The stock close button and title bar go: the tool bar has its own close
+		m.empty();
+		for (const [k, v] of Object.entries(MODAL)) m.style.setProperty(k, v, "important");
+		// A focused note behind the pad would keep the on-screen keyboard up,
+		// covering half the page
+		(document.activeElement as HTMLElement | null)?.blur?.();
+		this.pad.mount(m, {
+			scope: this.scope,
+			close: () => this.close(),
+			convert: () => { this.converting = true; this.close(); },
+			swap: this.onSwap ? { to: "split", go: () => { this.swapping = true; this.close(); } } : undefined,
+		});
+	}
+
+	onClose() {
+		const strokes = this.pad.unmount();
+		if (this.swapping) this.onSwap?.();
+		else this.onExit({ strokes, convert: this.converting });
+	}
+}
+
+/** One sheet of paper, shown in whatever hosts it (see PadHost).
  *
- *  Not a document and not a view: it holds a page of ink until the user either
- *  converts it, which hands the strokes to the plugin to be read, or closes it,
- *  which keeps them as a draft. Nothing here touches the vault.
+ *  Not a document: it holds a page of ink until the user either converts it,
+ *  which hands the strokes to the plugin to be read, or closes it, which keeps
+ *  them as a draft. Nothing here touches the vault.
  *
  *  The page is a fixed A4 sheet. Zoomed all the way out the whole of it fits
  *  on screen; zoomed in, a finger pans it in either direction. */
-export class InkPad extends Modal {
+export class InkPad {
 	private root!: HTMLDivElement;
 	private surface!: HTMLDivElement;
 	private base!: HTMLCanvasElement;
@@ -64,7 +121,6 @@ export class InkPad extends Modal {
 	private desk = "";
 
 	private strokes: Stroke[];
-	private convert = false;
 	private cur: Stroke | null = null;
 	private lasso: [number, number][] | null = null;
 	private drawing = false;
@@ -134,29 +190,38 @@ export class InkPad extends Modal {
 	private grid = { n: 0, whole: 0, half: 0, last: 0 };
 	/** Set on the first resize, which is when the page width is known */
 	private placed = false;
+	/** For a pad moved to a new host: the line of the page that was at the top
+	 *  of the view, to carry on from there */
+	private keepTop: number | null = null;
+
+	/** Whoever shows the pad now; set on each mount, since the pad can move */
+	private host!: PadHost;
+	/** The shortcuts registered with the host, to take back when leaving it */
+	private keys: KeymapEventHandler[] = [];
 
 	constructor(
-		app: App,
 		private plugin: HandwritingPlugin,
 		strokes: Stroke[],
-		private onExit: (exit: PadExit) => void,
 	) {
-		super(app);
 		this.strokes = strokes;
 	}
 
 	/* ============ Lifecycle ============ */
 
-	onOpen() {
-		const m = this.modalEl;
-		// The stock close button and title bar go: the tool bar has its own close
-		m.empty();
-		for (const [k, v] of Object.entries(MODAL)) m.style.setProperty(k, v, "important");
-		// A focused note behind the pad would keep the on-screen keyboard up,
-		// covering half the page
-		(document.activeElement as HTMLElement | null)?.blur?.();
-
-		const root = this.root = m.createDiv();
+	/** Build the pad inside `parent`, which must already be in the document:
+	 *  the desk colour is read from the theme, and the canvas sized to fit.
+	 *  A pad taken down can be mounted again elsewhere, with its page, undo
+	 *  history and view as they were. */
+	mount(parent: HTMLElement, host: PadHost) {
+		this.host = host;
+		// Unknown until measured, so the first applyLayout builds both bars
+		// again in the new place
+		this.narrow = null;
+		// The zoom is relative to the space the page has, so it does not carry
+		// over: a pad moved into a narrower pane would be zoomed in. It is placed
+		// afresh, on the same part of the page.
+		if (this.placed) { this.placed = false; this.keepTop = this.panY; }
+		const root = this.root = parent.createDiv();
 		// Obsidian's mobile edge swipes walk up from the touch target looking for
 		// this flag, the same opt-out its own sliders use. Without it a finger on
 		// the dial or either bar can open a sidebar mid-gesture.
@@ -200,8 +265,10 @@ export class InkPad extends Modal {
 		this.applyLayout();   // the first call always builds both bars
 		this.bindPointer();
 
-		this.scope.register(["Mod"], "z", () => { this.undo(); return false; });
-		this.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; });
+		this.keys = [
+			host.scope.register(["Mod"], "z", () => { this.undo(); return false; }),
+			host.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; }),
+		];
 
 		this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
 		this.ro.observe(root);         // decides the narrow layout
@@ -210,14 +277,48 @@ export class InkPad extends Modal {
 		this.resize();
 	}
 
-	onClose() {
+	/** Take the pad down and hand back what is on the page */
+	unmount(): Stroke[] {
+		for (const k of this.keys) this.host.scope.unregister(k);
+		this.keys = [];
 		this.ro?.disconnect();
 		if (this.paintReq != null) window.cancelAnimationFrame(this.paintReq);
-		window.cancelAnimationFrame(this.retractRaf);
+		// Settled rather than just stopped: a stroke left mid-retract is kept
+		// off the page layer, and would stay off it after a remount
+		this.settleRetract();
 		this.stopGlide();
+		// Fingers down here will never lift here; the next mount starts with none
+		this.touches.clear();
+		this.pinch = null;
+		this.panFrom = null;
 		this.plugin.padReport = this.report();
-		this.modalEl.empty();
-		this.onExit({ strokes: this.strokes, convert: this.convert });
+		this.root.remove();
+		return this.strokes;
+	}
+
+	/** Whether there is anything on the page */
+	get empty() { return !this.strokes.length; }
+
+	/** Hand the page over and start a clean one, for a host that stays open
+	 *  after converting. The undo history goes with it: undoing back into a
+	 *  page already sent would send it twice. The clean page opens as a new
+	 *  pad does, at the top, filling the width. */
+	takePage(): Stroke[] {
+		const page = this.strokes;
+		this.setPage([]);
+		this.zoom = this.widthZoom();
+		this.panX = this.panY = -Infinity;
+		this.syncViewport();
+		return page;
+	}
+
+	/** Put a page back, when converting it failed */
+	setPage(strokes: Stroke[]) {
+		this.settleRetract();
+		this.strokes = strokes;
+		this.undoStack = [];
+		this.clearSelection();
+		this.redrawAll();
 	}
 
 	private report(): Record<string, string> {
@@ -245,8 +346,7 @@ export class InkPad extends Modal {
 		if (!this.strokes.length) { new Notice(t("notice.empty")); return; }
 		const problem = this.plugin.convertBlocker();
 		if (problem) { new Notice(problem); return; }
-		this.convert = true;
-		this.close();
+		this.host.convert();
 	}
 
 	private applyLayout() {
@@ -285,7 +385,16 @@ export class InkPad extends Modal {
 		};
 		const sep = () => bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } });
 
-		btn("close", t("tool.close"), () => this.close());
+		btn("close", t("tool.close"), () => this.host.close());
+		const swap = this.host.swap;
+		if (swap) {
+			const split = swap.to === "split";
+			const b = btn(swap.to, t(split ? "tool.split" : "tool.full"), () => swap.go());
+			// Worded as well as drawn: an icon alone leaves you guessing whether
+			// it shows where the pad is or where it would go
+			b.setCssProps({ "flex-direction": "column", gap: "2px" });
+			b.createDiv({ text: t(split ? "tool.splitLabel" : "tool.fullLabel"), attr: { style: S.btnCaption } });
+		}
 		sep();
 		const penBtn = btn("pen", t("tool.pen"), () => this.setTool("pen"));
 		const aiBtn = btn("pen", t("tool.aiPen"), () => this.setTool("ai"));
@@ -511,10 +620,13 @@ export class InkPad extends Modal {
 			cv.style.height = r.height + "px";
 		}
 		if (!this.placed) {
-			// Open at the top of the page, filling the width
+			// Open at the top of the page, filling the width; a moved pad fills
+			// the new width where it was
 			this.placed = true;
 			this.zoom = this.widthZoom();
-			this.panX = this.panY = -Infinity;
+			this.panX = -Infinity;
+			this.panY = this.keepTop ?? -Infinity;
+			this.keepTop = null;
 		}
 		this.clampPan();
 		this.placeCtxBar();

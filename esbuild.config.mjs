@@ -41,7 +41,9 @@ const production = process.argv[2] === "production";
 const context = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
-  external: ["obsidian", "electron", ...builtinModules],
+  // The editor's own modules are Obsidian's too: an extension must use the
+  // copy the editor runs on
+  external: ["obsidian", "electron", "@codemirror/state", "@codemirror/view", ...builtinModules],
   format: "cjs",
   target: "es2020",
   logLevel: "info",

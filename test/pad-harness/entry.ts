@@ -1,4 +1,8 @@
-import { InkPad } from "../../src/pad";
+import { Scope } from "obsidian";
+import { EditorState } from "@codemirror/state";
+import { EditorView } from "@codemirror/view";
+import { ghostCaret, refreshGhosts } from "../../src/ghost";
+import { InkPad, PadModal } from "../../src/pad";
 import { InkOpts, Stroke, build, drawStroke, rasterize } from "../../src/ink";
 
 const settings = {
@@ -12,11 +16,56 @@ const plugin = {
 	convertBlocker: () => (window as any).__blocker ?? null,
 };
 const w = window as any;
+/* The pad itself, not its host, goes in __pad: the tests read its state
+ * directly. The hosts' shortcut layers go in __modalScope and __paneScope. */
+const showFull = (pad: InkPad, paneSize?: [number, number]) => {
+	const modal = new PadModal({} as any, pad, (x) => { w.__exit = x; },
+		paneSize && (() => showPane(pad, ...paneSize)));
+	modal.open();
+	w.__modalScope = modal.scope;
+	w.__pad = pad;
+};
+
+/* A stand-in for the pane: a box of the given size at the left of the screen,
+ * hosting the pad the way PadView does, so moving between hosts and
+ * converting in place can be tested here. PadView itself needs Obsidian's
+ * workspace, and is tried on the device. */
+let pane: HTMLElement | null = null;
+const showPane = (pad: InkPad, width: number, height: number) => {
+	pane = document.body.createDiv({ attr: { style: `position:fixed;left:0;top:0;width:${width}px;height:${height}px;display:flex;overflow:hidden;` } });
+	const scope = new Scope();
+	const leave = () => { const strokes = pad.unmount(); pane?.remove(); pane = null; return strokes; };
+	pad.mount(pane, {
+		scope,
+		close: () => { w.__exit = { strokes: leave(), convert: false }; },
+		convert: () => { w.__sent = pad.takePage(); },
+		swap: { to: "full", go: () => { leave(); showFull(pad, [width, height]); } },
+	});
+	w.__paneScope = scope;
+	w.__pad = pad;
+};
+
 w.openPad = (strokes: unknown[] = []) => {
 	w.__exit = null;
-	w.__pad = new InkPad({} as any, plugin as any, strokes as any, (x) => { w.__exit = x; });
-	w.__pad.open();
+	showFull(new InkPad(plugin as any, strokes as any));
 };
+/** Full screen with the button to move into a pane of this size, as on a tablet */
+w.openSwappable = (width: number, height: number, strokes: unknown[] = []) => {
+	w.__exit = null;
+	w.__sent = null;
+	showFull(new InkPad(plugin as any, strokes as any), [width, height]);
+};
+w.resizePane = (width: number, height: number) => pane?.setCssProps({ width: width + "px", height: height + "px" });
+
+/* A plain CodeMirror editor with the stand-in caret, as a note has it. It
+ * counts as the note the pad writes into while __wanted is set. */
+w.__wanted = true;
+w.ghostEditor = (doc: string, at: number) => {
+	const parent = document.body.createDiv({ attr: { style: "position:fixed;left:0;top:0;width:500px;height:300px;background:#fff;font:16px sans-serif;" } });
+	w.__editor = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: at }, extensions: [ghostCaret(() => !!w.__wanted)] }) });
+	w.__editorEl = parent;
+};
+w.refreshGhosts = refreshGhosts;
 w.settings = settings;
 w.rasterize = (strokes: any[]) => rasterize(strokes, plugin.opts(), 1568)?.toDataURL("image/png") ?? null;
 
