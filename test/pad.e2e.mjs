@@ -382,6 +382,92 @@ try {
 	await shot("full-page");
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- in a pane, and moving between hosts ---- */
+	await viewport(1180, 820);   // landscape, the way split view is used
+	await js("openSwappable(590, 820)");
+	await frame();
+	ok(await js(`!!document.querySelector('button[aria-label="Open beside the note"]')`), "full screen offers the pane where there is one");
+	await pen(line(300, 300, 600, 300));
+	await pen(line(300, 360, 600, 360));
+	await button("Open beside the note");
+	await new Promise((r) => setTimeout(r, 300));
+	const host = () => js(`(() => { const p = __pad, c = p.live.getBoundingClientRect(); return {
+		strokes: p.strokes.length, undo: p.undoStack.length, narrow: p.narrow, c: [c.width, c.height],
+		widthFit: Math.abs(p.zoom - p.widthZoom()) < 1e-6, top: p.panY,
+		modal: !!document.querySelector('.modal-container'), mounted: p.live.isConnected,
+		modalKeys: __modalScope.keys.length, paneKeys: __paneScope?.keys.length ?? null,
+		full: !!document.querySelector('button[aria-label="Full screen"]'),
+		split: !!document.querySelector('button[aria-label="Open beside the note"]') }; })()`);
+	let h = await host();
+	ok(!h.modal && h.strokes === 2 && h.undo === 2, `moving into the pane keeps the page and its undo history: ${JSON.stringify(h)}`);
+	ok(h.c[0] > 300 && h.c[0] < 590 && h.c[1] > 700, `the canvas fits the pane: ${h.c}`);
+	ok(h.widthFit, "the page fills the pane's width, rather than keeping a zoom made for the whole screen");
+	ok(h.full && !h.split && h.modalKeys === 0 && h.paneKeys === 2, `the pane offers full screen, and the shortcuts moved with the pad: ${h.modalKeys} left behind, ${h.paneKeys} in the pane`);
+	await shot("pane");
+	await pen(line(100, 500, 300, 500));
+	s = await state();
+	ok(s.strokes === 3, "the pen writes in the pane");
+	await js("resizePane(360, 820)");
+	await new Promise((r) => setTimeout(r, 300));
+	h = await host();
+	ok(h.narrow === true && h.c[0] <= 360 && h.c[0] > 300, `a narrow pane gets the narrow layout, and the canvas follows: ${JSON.stringify(h)}`);
+	await js("resizePane(590, 820)");
+	await new Promise((r) => setTimeout(r, 300));
+	await button("Turn this into Markdown at the cursor");
+	h = await host();
+	const sent = await js("__sent?.length ?? null");
+	ok(sent === 3 && h.strokes === 0 && h.undo === 0 && h.mounted, `converting in the pane sends the page and leaves a clean one open: sent ${sent}, ${JSON.stringify(h)}`);
+	await js("__pad.setPage(__sent)");
+	s = await state();
+	ok(s.strokes === 3, "a page put back after a failure shows");
+	// Zoomed in and scrolled down, to see that full screen carries on from there
+	await js("__pad.zoom = 2; __pad.panY = 400; __pad.syncViewport()");
+	const topBefore = await js("__pad.panY");
+	await button("Full screen");
+	await new Promise((r) => setTimeout(r, 300));
+	h = await host();
+	ok(h.modal && h.strokes === 3 && h.paneKeys === 0 && h.modalKeys === 2 && h.c[0] > 900, `back to full screen with the page: ${JSON.stringify(h)}`);
+	ok(h.widthFit && Math.abs(h.top - topBefore) < 1, `filling the width again, on the same part of the page: top ${h.top} (was ${topBefore})`);
+	await button("Close (your writing is kept for next time)");
+	s = await state();
+	ok(!s.open && s.exit?.convert === false && s.exit.strokes === 3, `and closing from there keeps it: ${JSON.stringify(s.exit)}`);
+	// Where there is no split view, as on a phone, there is no button for it
+	await js("openPad([])");
+	await frame();
+	h = await host();
+	ok(!h.split && !h.full, "without a pane to go to, no button for one");
+	await button("Close (your writing is kept for next time)");
+
+	/* ---- the stand-in caret, in the note the pane writes into ---- */
+	await js("ghostEditor('Proof:\\n\\nTheorem 2', 6)");
+	const ghost = () => js("(() => { const g = __editor.contentDOM.querySelector('.inkdown-ghost-caret'); return g ? __editor.posAtDOM(g) : null; })()");
+	await js("__editor.focus()");
+	await frame();
+	ok(await ghost() === null, "the note has the focus: its own caret, no stand-in");
+	await js("document.activeElement.blur()");
+	await frame();
+	ok(await ghost() === 6, "the focus gone, to the pad: the stand-in where the caret was");
+	await js("__editor.dispatch({ selection: { anchor: 2, head: 4 } })");
+	await frame();
+	ok(await ghost() === 4, "with a selection, at its end, where the page goes in");
+	await js("__editor.dispatch({ changes: { from: 0, insert: 'X ' } })");
+	await frame();
+	ok(await ghost() === 6, "text put in before it, as a placeholder is: it moves along");
+	const textAt = () => js("__editor.coordsAtPos(7).left");
+	const withGhost = await textAt();
+	await js("__wanted = false; refreshGhosts()");
+	await frame();
+	ok(await ghost() === null, "the pane closed, or another note chosen: it goes");
+	const withoutGhost = await textAt();
+	ok(Math.abs(withGhost - withoutGhost) < 0.5, `the text does not move when it comes and goes: ${withGhost} with it, ${withoutGhost} without`);
+	await js("__wanted = true; refreshGhosts()");
+	await frame();
+	ok(await ghost() === 6, "and comes back with the pane");
+	await js("__editor.focus()");
+	await frame();
+	ok(await ghost() === null, "back in the note, the real caret takes over");
+	await js("__editor.destroy(); __editorEl.remove()");
+
 	/* ---- other shapes of screen ---- */
 	for (const [w, h, name] of [[1180, 820, "landscape"], [390, 844, "phone"]]) {
 		await viewport(w, h);

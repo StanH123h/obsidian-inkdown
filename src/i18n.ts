@@ -23,6 +23,15 @@ const STR = {
 	"tool.close": ["Close (your writing is kept for next time)", "关闭（字迹会留到下次）"],
 	"tool.convert": ["Convert", "转换"],
 	"tool.convertHint": ["Turn this into Markdown at the cursor", "转成 Markdown，插到光标处"],
+	"tool.split": ["Open beside the note", "在笔记旁边打开"],
+	"tool.full": ["Full screen", "全屏"],
+	"tool.splitLabel": ["Split", "分屏"],
+	"tool.fullLabel": ["Full", "全屏"],
+
+	/* the pad in a pane */
+	"view.title": ["Handwriting pad", "手写板"],
+	"view.target": ["Into: {0}", "插到：{0}"],
+	"view.noTarget": ["Tap the note to write into", "点一下要插入的笔记"],
 
 	/* context bar and dial */
 	"ctx.penWidth": ["Pen width {0}", "笔宽 {0}"],

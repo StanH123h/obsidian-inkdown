@@ -130,10 +130,27 @@ export const S = {
 	btnBadge:
 		"position:absolute;right:1px;bottom:2px;font-size:8px;line-height:1;" +
 		"font-weight:800;letter-spacing:-.02em;pointer-events:none;",
+	// A word under an icon, for a button whose icon alone would leave you guessing
+	btnCaption: "font-size:9px;line-height:1;font-weight:700;white-space:nowrap;pointer-events:none;",
 
 	version:
 		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +
 		`color:${MUTED};opacity:.55;text-align:center;`,
+
+	// The stand-in caret in the note (see ghost.ts). Thicker than the real one
+	// and in the theme's accent, so it is not taken for it; it takes no room
+	// of its own, so the text does not move when it comes and goes.
+	ghostCaret:
+		"display:inline-block;width:3px;height:1.3em;margin:0 -1.5px;vertical-align:-0.3em;" +
+		"border-radius:1.5px;pointer-events:none;background:var(--interactive-accent, #8a6cf0);",
+
+	// Which note a pane's page goes into, at the top of the pane. The pen
+	// writes straight through it.
+	target:
+		"position:absolute;z-index:30;top:8px;left:50%;transform:translateX(-50%);max-width:60%;" +
+		"padding:3px 10px;border-radius:11px;font-size:12px;line-height:18px;" +
+		"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;" +
+		`color:${MUTED};background:var(--background-primary, #fff);border:1px solid ${BORDER};opacity:.92;`,
 
 	dot: (px: number) =>
 		`width:${px}px;height:${px}px;border-radius:50%;flex:0 0 auto;background:var(--text-normal, #222);`,
@@ -142,6 +159,9 @@ export const S = {
 /* Icons are inline SVG rather than Obsidian's setIcon, whose icon names are not
  * guaranteed to exist across versions and platforms. Width and height are set
  * as attributes and inline styles, never left to a stylesheet. */
+/** A filled shape among the outlines */
+const solid = (d: string) => ({ d, fill: true });
+
 export const ICONS = {
 	pen: [
 		"M4 20l4.5-1.2 9.3-9.3-3.3-3.3-9.3 9.3z",
@@ -168,6 +188,18 @@ export const ICONS = {
 	fit: ["M4 9V5h4", "M20 9V5h-4", "M4 15v4h4", "M20 15v4h-4"],
 	undo: ["M4 10h10.5a4.5 4.5 0 0 1 0 9H9", "M4 10l4-4", "M4 10l4 4"],
 	close: ["M6 6l12 12", "M18 6L6 18"],
+	/* Moving the pad, drawn the way macOS and iPadOS draw window tiling: a
+	 * screen with the part the pad will take filled in, the right half or all
+	 * of it. Arrows or corners would read as "bigger", which is what the fit
+	 * button's four corners already say about the page. */
+	split: [
+		"M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+		solid("M13.5 8a1 1 0 0 1 1-1H18a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-3.5a1 1 0 0 1-1-1z"),
+	],
+	full: [
+		"M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
+		solid("M5 8a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"),
+	],
 	/* Paper plane, after Lucide's "send" (ISC) */
 	send: [
 		"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
@@ -206,6 +238,16 @@ export const MODAL: Record<string, string> = {
 	background: "var(--background-secondary, #f2f2f2)",
 };
 
+/* The pad in a pane: the pane's content area loses its padding and scrolling,
+ * so the pad fills it edge to edge. Applied the same way as MODAL. */
+export const PANE: Record<string, string> = {
+	position: "relative",
+	padding: "0",
+	display: "flex",
+	overflow: "hidden",
+	background: "var(--background-secondary, #f2f2f2)",
+};
+
 /* Optical sizing. Rendering every icon at the same nominal size does not make
  * them look the same size: a shape that leaves its corners empty, like the
  * eraser's tilted block, reads smaller than one that fills the frame. These are
@@ -231,9 +273,14 @@ export function drawIcon(el: HTMLElement, name: keyof typeof ICONS, px?: number)
 	// Size goes into the inline style as well: with attributes alone, some WebKit
 	// versions still let a stylesheet collapse it to 0
 	svg.setAttribute("style", `width:${size}px;height:${size}px;display:block;flex:0 0 auto;`);
-	for (const d of ICONS[name]) {
+	for (const part of ICONS[name]) {
 		const p = document.createElementNS(NS, "path");
-		p.setAttribute("d", d);
+		if (typeof part === "string") p.setAttribute("d", part);
+		else {
+			p.setAttribute("d", part.d);
+			p.setAttribute("fill", "currentColor");
+			p.setAttribute("stroke", "none");
+		}
 		svg.appendChild(p);
 	}
 	el.appendChild(svg);

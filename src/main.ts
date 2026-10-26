@@ -1,5 +1,8 @@
-import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, SecretComponent, Setting, TFile } from "obsidian";
-import { PadModal } from "./pad";
+import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, SecretComponent, Setting, TFile, editorInfoField } from "obsidian";
+import type { EditorView } from "@codemirror/view";
+import { InkPad, PadMode, PadModal } from "./pad";
+import { PAD_VIEW, PadView } from "./padview";
+import { ghostCaret, refreshGhosts } from "./ghost";
 import { InkOpts, Stroke, rasterize } from "./ink";
 import {
 	CLAUDE_MODELS, CONTEXT_AFTER, CONTEXT_BEFORE, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL, Engine, IMAGE_EDGE,
@@ -39,6 +42,9 @@ export interface HandwritingSettings {
 	/** Where the eraser dial sits on the canvas, in pixels; -1 = never moved */
 	dialX: number;
 	dialY: number;
+	/** How the pad opens: the way it was last used, set by its own button.
+	 *  Beside the note until changed; a phone always has it full screen. */
+	padMode: PadMode;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -64,6 +70,7 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	allowFinger: false,
 	dialX: -1,
 	dialY: -1,
+	padMode: "split",
 };
 
 export default class HandwritingPlugin extends Plugin {
@@ -74,10 +81,23 @@ export default class HandwritingPlugin extends Plugin {
 	 *  and keeping it out of the vault is the whole idea. */
 	private draft: Stroke[] = [];
 	private inFlight = 0;
+	/** The placeholders of conversions still out. An answer finds its own by
+	 *  its text, so no two may read the same, as two sent within one second
+	 *  otherwise would. */
+	private markers = new Set<string>();
 	/** The last conversion, for the diagnostics panel */
 	private last: Record<string, string> = {};
 	/** What the pad measured the last time it was open */
 	padReport: Record<string, string> = {};
+	/** The Markdown note last worked in: where a page from the pane goes */
+	private lastNote: MarkdownView | null = null;
+	/** A pad on its way into a pane */
+	private handoff: InkPad | null = null;
+	/** The pad on screen, in either host, for a failed conversion to come
+	 *  back to. There is never more than one. */
+	private shown: InkPad | null = null;
+	/** Whether that pad is in a pane, beside the note it writes into */
+	private inPane = false;
 
 	/** The pen button in each note's header, per view. A view can re-render
 	 *  its header and drop the button without saying so. */
@@ -110,7 +130,8 @@ export default class HandwritingPlugin extends Plugin {
 		});
 
 		this.addRibbonIcon("pen-tool", t("cmd.open"), () => {
-			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			// With the pane active, the note beside it is the one meant
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView) ?? this.target();
 			if (view) this.openPad(view);
 			else new Notice(t("notice.noNote"));
 		});
@@ -126,7 +147,20 @@ export default class HandwritingPlugin extends Plugin {
 		// On an iPad the ribbon is tucked away in a drawer and the command palette
 		// is a keyboard affair, so every note gets a pen in its header too
 		this.registerEvent(this.app.workspace.on("layout-change", () => this.syncHeaderButtons()));
-		this.app.workspace.onLayoutReady(() => this.syncHeaderButtons());
+
+		this.registerView(PAD_VIEW, (leaf) => new PadView(leaf, this));
+		// A page from the pane goes into the note last worked in. Tapping the
+		// pane itself, or any view that is not a note, leaves that unchanged.
+		const noteChanged = () => {
+			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+			if (view) this.lastNote = view;
+			this.showTargets();
+		};
+		this.registerEvent(this.app.workspace.on("active-leaf-change", noteChanged));
+		this.registerEvent(this.app.workspace.on("file-open", noteChanged));
+		this.registerEditorExtension(ghostCaret((view) => this.writesInto(view)));
+
+		this.app.workspace.onLayoutReady(() => { this.syncHeaderButtons(); noteChanged(); });
 
 		this.addSettingTab(new HandwritingSettingTab(this.app, this));
 	}
@@ -150,14 +184,92 @@ export default class HandwritingPlugin extends Plugin {
 	/* ============ The pad ============ */
 
 	private openPad(view: MarkdownView) {
-		const file = view.file;
-		if (!file) { new Notice(t("notice.noNote")); return; }
+		if (!view.file) { new Notice(t("notice.noNote")); return; }
+		this.lastNote = view;
+		this.showTargets();
+		// One pad at a time: a pane already open is brought forward
+		const open = this.app.workspace.getLeavesOfType(PAD_VIEW)[0];
+		if (open) { void this.app.workspace.revealLeaf(open); return; }
+		const pad = new InkPad(this, this.takeDraft());
+		if (this.settings.padMode === "split" && !Platform.isPhone) this.showSplit(pad);
+		else this.showFull(pad);
+	}
+
+	/** The pad over the whole screen. Its page goes into the note it opens
+	 *  over, the one last worked in. A phone gets no button to move it to a
+	 *  pane: it has no split view. */
+	showFull(pad: InkPad) {
+		const view = this.target(), file = view?.file;
+		this.shown = pad;
+		this.inPane = false;
+		this.showTargets();
+		const toPane = Platform.isPhone ? undefined : () => {
+			this.settings.padMode = "split";
+			void this.saveSettings();
+			this.showSplit(pad);
+		};
+		new PadModal(this.app, pad, (exit) => {
+			this.shown = null;
+			if (!exit.convert) this.draft = exit.strokes;
+			else if (view && file) void this.convert(view, file, exit.strokes);
+			else { this.draft = exit.strokes; new Notice(t("notice.noNote")); }
+		}, toPane).open();
+	}
+
+	/** The pad in a pane beside the active note. The pane takes it up through
+	 *  receivePad() once Obsidian has made it. */
+	private showSplit(pad: InkPad) {
+		this.handoff = pad;
+		this.shown = pad;
+		void this.app.workspace.getLeaf("split", "vertical").setViewState({ type: PAD_VIEW, active: true });
+	}
+
+	/** The pad for a pane that is opening: the one being moved into it, or a
+	 *  new one with the draft when Obsidian reopens the pane by itself, as it
+	 *  does at startup when the pane was open before */
+	receivePad(): InkPad {
+		const pad = this.handoff ?? new InkPad(this, this.takeDraft());
+		this.handoff = null;
+		this.shown = pad;
+		this.inPane = true;
+		this.showTargets();
+		return pad;
+	}
+
+	/** A pane was closed: its page is kept as the draft */
+	padClosed(strokes: Stroke[]) {
+		this.shown = null;
+		this.inPane = false;
+		this.draft = strokes;
+		this.showTargets();
+	}
+
+	/** The draft, for a pad that is opening; from now on it lives there */
+	private takeDraft(): Stroke[] {
 		const strokes = this.draft;
 		this.draft = [];
-		new PadModal(this.app, this, strokes, (exit) => {
-			if (exit.convert) void this.convert(view, file, exit.strokes);
-			else this.draft = exit.strokes;
-		}).open();
+		return strokes;
+	}
+
+	/** Where a page from the pane goes: the Markdown note last worked in, as
+	 *  long as it is still open */
+	target(): MarkdownView | null {
+		const view = this.lastNote;
+		return view?.file && view.containerEl.isConnected ? view : null;
+	}
+
+	/** Whether a note's editor is the one the pane's page goes into, and so
+	 *  shows where it goes in (see ghost.ts) */
+	private writesInto(view: EditorView): boolean {
+		return this.inPane && view.state.field(editorInfoField, false) === this.target();
+	}
+
+	/** Show where the pane's page goes: on the pane, by name, and in the note,
+	 *  with the stand-in caret */
+	private showTargets() {
+		for (const leaf of this.app.workspace.getLeavesOfType(PAD_VIEW))
+			if (leaf.view instanceof PadView) leaf.view.showTarget();
+		refreshGhosts();
 	}
 
 	/** Why converting cannot start, or null when it can */
@@ -187,13 +299,16 @@ export default class HandwritingPlugin extends Plugin {
 	 *  placeholder holds the spot, and the result replaces it wherever it has
 	 *  moved to by then. Typing above it, switching notes or closing this one
 	 *  are all fine. */
-	private async convert(view: MarkdownView, file: TFile, strokes: Stroke[]) {
+	async convert(view: MarkdownView, file: TFile, strokes: Stroke[]) {
 		const cv = rasterize(strokes, this.opts(), IMAGE_EDGE);
 		if (!cv) return;
 		const png = cv.toDataURL("image/png").replace(/^data:image\/png;base64,/, "");
 		const d = new Date();
 		const two = (n: number) => String(n).padStart(2, "0");
-		const marker = t("notice.pending", `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`);
+		const time = `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`;
+		let marker = t("notice.pending", time);
+		for (let k = 2; this.markers.has(marker); k++) marker = t("notice.pending", `${time} #${k}`);
+		this.markers.add(marker);
 		const engine = this.engine();
 		const t0 = performance.now();
 		this.inFlight++;
@@ -210,11 +325,18 @@ export default class HandwritingPlugin extends Plugin {
 			const msg = (e as Error)?.message ?? String(e);
 			this.last["state"] = "failed: " + msg;
 			await this.settle(file, marker, "").catch(() => { /* the note may be gone; nothing to tidy */ });
-			// The writing goes back in the pad, unless something new has been
-			// started there since -- the two pages would land on top of each other
-			if (this.draft.length) new Notice(t("notice.failedNotRestored", msg), 12000);
-			else { this.draft = strokes; new Notice(t("notice.failed", msg), 12000); }
+			// The writing goes back in the pad: onto it if it is open, into the
+			// draft if not. Unless something new has been started there since --
+			// the two pages would land on top of each other.
+			const pad = this.shown;
+			if (pad ? !pad.empty : this.draft.length) new Notice(t("notice.failedNotRestored", msg), 12000);
+			else {
+				if (pad) pad.setPage(strokes);
+				else this.draft = strokes;
+				new Notice(t("notice.failed", msg), 12000);
+			}
 		} finally {
+			this.markers.delete(marker);
 			this.inFlight--;
 			this.last["took"] = `${((performance.now() - t0) / 1000).toFixed(1)} s`;
 		}
@@ -310,6 +432,7 @@ export default class HandwritingPlugin extends Plugin {
 			"model": s.provider === "openai" ? s.openaiModel : s.anthropicModel,
 			"api key": !secret ? "not linked" : this.apiKey() ? `linked (${secret})` : `linked to "${secret}", which is empty on this device`,
 			"draft strokes": String(this.draft.length),
+			"pad": `opens ${this.settings.padMode === "split" && !Platform.isPhone ? "beside the note" : "full screen"}${this.shown ? ", open now" : ""}`,
 			"in flight": String(this.inFlight),
 		};
 		for (const [k, v] of Object.entries(this.last)) out["last: " + k] = v;
@@ -336,6 +459,7 @@ export default class HandwritingPlugin extends Plugin {
 		const n = Number(s.eraserSize);
 		s.eraserSize = Number.isFinite(n) && n >= SIZE_MIN && n <= SIZE_MAX ? n : DEFAULT_SETTINGS.eraserSize;
 		if (s.eraserMode !== "precise") s.eraserMode = "stroke";
+		if (s.padMode !== "full") s.padMode = "split";
 		const saved = Array.isArray(s.sizes) ? s.sizes : [];
 		s.sizes = DEFAULT_SETTINGS.sizes.map((d, i) => {
 			const v = Number(saved[i]);
