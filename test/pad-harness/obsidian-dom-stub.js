@@ -15,6 +15,7 @@ P.createDiv = function (info) { return this.createEl('div', info); };
 P.createSpan = function (info) { return this.createEl('span', info); };
 P.empty = function () { while (this.firstChild) this.removeChild(this.firstChild); };
 P.setText = function (s) { this.textContent = s; };
+P.setCssProps = function (props) { for (const [k, v] of Object.entries(props)) this.style.setProperty(k, v); };
 
 class Modal {
   constructor(app) {
