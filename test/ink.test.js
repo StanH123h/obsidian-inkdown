@@ -10,7 +10,7 @@
  * rasterised -- test/pad.e2e.mjs renders noisy strokes and looks for them --
  * nor how it looks or performs on the iPad itself. The pad reports draw times
  * in the diagnostics panel for that. */
-const { build } = require('../.test-build/ink.cjs');
+const { build, erasePrecise } = require('../.test-build/ink.cjs');
 
 let bad = 0, n = 0;
 const ok = (cond, msg) => { n++; if (!cond) { bad++; console.log('FAIL ' + msg); } };
@@ -174,6 +174,18 @@ eq(build({ c: '#000', s: 8, pts: exact, q: 0 }, opt(0)).length, build({ c: '#000
   // suddenly thin it
   const taper = { ...opt(1), taper: 1 };
   eq(build(st, taper, 2, 0), build(st, taper), 'with taper on, the lifted stroke is still the one drawn');
+}
+
+/* The precise eraser cutting an AI-pen note in two. The pieces are drawn in
+ * their colour on the pad, but the image for the model is coloured by `ai`:
+ * a piece without it goes in black and is read as part of the note. */
+{
+  const note = { c: '#7c3aed', s: 5, pts: noisy(Array.from({ length: 60 }, (_, i) => [i * 0.5, 10])), q: 0.25, ai: true };
+  const parts = erasePrecise([note], 15, 10, 3);
+  eq(parts.length, 2, 'erasing the middle of a stroke leaves two pieces');
+  for (const [i, { pts, ...rest }] of parts.entries())
+    eq(rest, { c: note.c, s: note.s, q: note.q, ai: true }, `piece ${i + 1} keeps everything but its points`);
+  ok(note.pts.length === 60, 'the stroke itself is left as it was, for undo');
 }
 
 console.log(bad ? `\n${bad} of ${n} checks failed` : `PASS ink: ${n} checks`);

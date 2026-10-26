@@ -550,7 +550,10 @@ export function erasePrecise(strokes: Stroke[], x: number, y: number, r: number)
 		}
 		if (cur.length >= 2) segs.push(cur);
 		if (!hit) { out.push(st); continue; }
-		for (const pts of segs) out.push({ c: st.c, s: st.s, pts });
+		// Each piece is still the same stroke, so it keeps everything but its
+		// points: a piece of an AI-pen note that lost `ai` would go to the model
+		// in black and be read as part of the note
+		for (const pts of segs) out.push({ ...st, pts });
 	}
 	return out;
 }
