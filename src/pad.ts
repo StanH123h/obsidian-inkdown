@@ -392,7 +392,7 @@ export class InkPad {
 			const b = btn(swap.to, t(split ? "tool.split" : "tool.full"), () => swap.go());
 			// Worded as well as drawn: an icon alone leaves you guessing whether
 			// it shows where the pad is or where it would go
-			b.setCssProps({ "flex-direction": "column", gap: "2px" });
+			b.setAttribute("style", off + S.btnStacked);
 			b.createDiv({ text: t(split ? "tool.splitLabel" : "tool.fullLabel"), attr: { style: S.btnCaption } });
 		}
 		sep();

@@ -132,6 +132,8 @@ export const S = {
 		"font-weight:800;letter-spacing:-.02em;pointer-events:none;",
 	// A word under an icon, for a button whose icon alone would leave you guessing
 	btnCaption: "font-size:9px;line-height:1;font-weight:700;white-space:nowrap;pointer-events:none;",
+	// Added to a button's own style, to stack its icon over its caption
+	btnStacked: "flex-direction:column;gap:2px;",
 
 	version:
 		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +
