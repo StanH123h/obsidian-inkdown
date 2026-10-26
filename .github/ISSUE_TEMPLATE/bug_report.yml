@@ -1,0 +1,73 @@
+name: Bug report
+description: Something doesn't work, or works differently than you expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. English or Chinese are both fine (中文也可以).
+
+        **Never paste your API key.** The diagnostics below only say whether a key is linked, never the key itself.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: If you can make it happen again, how?
+      placeholder: |
+        1. Open the pad
+        2. Write ...
+        3. Tap Convert
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - iPad
+        - iPhone
+        - Android tablet
+        - Android phone
+        - Mac
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: device-details
+    attributes:
+      label: Model, OS and pen
+      placeholder: iPad Air (M2), iPadOS 26.0, Apple Pencil Pro
+  - type: input
+    id: obsidian-version
+    attributes:
+      label: Obsidian version
+      description: Settings → General.
+      placeholder: "1.11.4"
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Inkdown version
+      description: Settings → Community plugins. It's also shown at the bottom of the pad's toolbar.
+      placeholder: "1.0.1"
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Right after the problem happens, before restarting Obsidian: open the command palette, run **Inkdown: Diagnostics**, and copy what it shows into this box. It has the pad's performance numbers and how the last conversion went. Remove anything you'd rather not share.
+      render: text
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or a screen recording
+      description: For a wrong conversion, a picture of what you wrote and what came out helps most. Drag files into this box.
