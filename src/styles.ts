@@ -16,6 +16,19 @@ const ACCENT = "var(--text-accent, #5b6ed6)";
 const HOVER = "var(--background-modifier-hover, rgba(127,127,127,.18))";
 const BORDER = "var(--background-modifier-border, rgba(127,127,127,.28))";
 
+/* The tool bar and the width bar are cards floating over the canvas, as the
+ * eraser dial does: the page runs on underneath. CARD_EDGE is their distance
+ * from the pad's edge, CARD_GAP the space between the two. */
+export const CARD_EDGE = 12;
+export const CARD_GAP = 8;
+const CARD =
+	// touch-action and the callout: a card is held down to be dragged, and
+	// must not scroll or bring up the system's menu meanwhile
+	"position:absolute;z-index:20;margin:0;box-sizing:border-box;border-radius:16px;" +
+	"touch-action:none;-webkit-touch-callout:none;" +
+	`background:var(--background-primary, #fff);border:1px solid ${BORDER};` +
+	"box-shadow:0 4px 18px rgba(0,0,0,.14);";
+
 const BTN =
 	"position:relative;display:flex;align-items:center;justify-content:center;flex:0 0 auto;" +
 	"width:40px;height:40px;padding:0;margin:0;border:0;border-radius:9px;" +
@@ -34,19 +47,49 @@ export const S = {
 	surface: "position:relative;flex:1 1 auto;min-width:0;min-height:0;touch-action:none;",
 	canvas: "position:absolute;inset:0;touch-action:none;",
 
+	// As tall as its buttons, and where the pad is shorter than that, a second
+	// column rather than buttons hidden in a scroll area. Placed by pad.ts.
 	tools:
-		// flex-wrap plus a fixed height wraps into a second column when the buttons
-		// do not fit, instead of hiding them in a scroll area
-		"display:flex;flex-direction:column;flex-wrap:wrap;align-items:center;" +
-		"align-content:flex-start;justify-content:flex-start;" +
-		`gap:6px;flex:0 0 auto;height:100%;padding:10px 8px;margin:0;box-sizing:border-box;` +
-		`overflow:hidden;border-left:1px solid ${BORDER};` +
-		"background:var(--background-secondary, rgba(127,127,127,.07));",
-	toolsNarrow:
-		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
-		"gap:4px;flex:0 0 auto;width:100%;height:58px;padding:8px;margin:0;box-sizing:border-box;" +
-		`overflow-x:auto;overflow-y:hidden;border-top:1px solid ${BORDER};` +
-		"background:var(--background-secondary, rgba(127,127,127,.07));",
+		CARD + "display:flex;flex-direction:column;flex-wrap:wrap;align-items:center;" +
+		"align-content:center;gap:6px;height:max-content;" +
+		`max-height:calc(100% - ${CARD_EDGE * 2}px);padding:6px 6px 8px;`,
+	// A row along the top or the foot; a second row where the pad is narrower
+	// than the buttons
+	toolsRow:
+		CARD + "display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;" +
+		"justify-content:center;gap:4px 2px;width:max-content;" +
+		`max-width:calc(100% - ${CARD_EDGE * 2}px);padding:6px;`,
+	// The handle a card is held by: across the top of a column, down the
+	// start of a row. A mouse takes it straight away; anywhere else on the
+	// card is held a moment first. The bar is drawn small but the handle
+	// around it is not, so it is easy to take hold of.
+	grip:
+		"flex:0 0 auto;display:flex;align-items:center;justify-content:center;" +
+		"width:40px;height:14px;margin:-2px 0;",
+	gripRow:
+		"flex:0 0 auto;display:flex;align-items:center;justify-content:center;" +
+		"width:14px;height:36px;margin:0 -2px;",
+	gripBar: "width:22px;height:4px;border-radius:2px;pointer-events:none;background:var(--text-faint, rgba(127,127,127,.45));",
+	gripBarRow: "width:4px;height:22px;border-radius:2px;pointer-events:none;background:var(--text-faint, rgba(127,127,127,.45));",
+	// Added to the tool bar while it is being dragged: up off the page
+	lifted: "z-index:27;box-shadow:0 12px 36px rgba(0,0,0,.28);cursor:grabbing;",
+	// Over the page while the tool bar is dragged, with an outline at each
+	// place it can go, the nearest filled in
+	dragShade:
+		// Over the eraser dial too (25), which stays on the page
+		"position:absolute;inset:0;z-index:26;touch-action:none;" +
+		"background:rgba(127,127,127,.12);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);",
+	slot: "position:absolute;box-sizing:border-box;border-radius:16px;border:2px dashed var(--text-faint, rgba(127,127,127,.5));",
+	slotOn:
+		"position:absolute;box-sizing:border-box;border-radius:16px;" +
+		`border:2px solid ${ACCENT};background:rgba(91,110,214,.16);`,
+	// The one-time hint by the tool bar, in the theme's colours turned round
+	hint:
+		"position:absolute;z-index:30;padding:6px 10px;margin:0;box-sizing:border-box;white-space:nowrap;" +
+		"border-radius:8px;font-size:13px;line-height:1.35;font-weight:600;cursor:pointer;" +
+		"background:var(--text-normal, #222);color:var(--background-primary, #fff);" +
+		"box-shadow:0 4px 14px rgba(0,0,0,.25);",
+	hintArrow: "position:absolute;bottom:-5px;width:10px;height:10px;transform:rotate(45deg);background:var(--text-normal, #222);",
 
 	btn: BTN + `background:transparent;color:${MUTED};`,
 	btnOn: BTN + `background:${HOVER};color:${ACCENT};`,
@@ -75,27 +118,15 @@ export const S = {
 		"padding:0;margin:0;border:0;border-radius:7px;background:transparent;cursor:pointer;" +
 		`color:${MUTED};`,
 
-	// Left-hand context bar: the configuration for whichever tool is active.
-	// CTX_W and CTX_H below must match its width and height here.
-	// Positioned absolutely so it floats over the canvas instead of competing with
-	// it for width -- otherwise the drawing area jumps sideways every time the bar
-	// appears or disappears. Its offset from the edge is measured at runtime, since
-	// the tool bar has no fixed width: it wraps into a second column when the
-	// buttons do not fit.
+	// The width bar: the pens' widths, beside the tool bar while a pen is in
+	// hand. CTX_W and CTX_H below must match its width and its narrow height.
 	ctxBar:
-		"position:absolute;z-index:20;top:0;height:100%;width:72px;" +
-		"display:flex;flex-direction:column;align-items:center;justify-content:flex-start;" +
-		"gap:7px;padding:10px 6px;margin:0;box-sizing:border-box;overflow:hidden;" +
-		`border-left:1px solid ${BORDER};box-shadow:-4px 0 14px rgba(0,0,0,.10);` +
-		// A shade darker than the tool bar so the two columns read as two
-		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
-	ctxBarNarrow:
-		"position:absolute;z-index:20;left:0;right:0;height:58px;" +
-		"display:flex;flex-direction:row;align-items:center;justify-content:flex-start;" +
-		"gap:7px;padding:8px 10px;margin:0;box-sizing:border-box;" +
-		"overflow-x:auto;overflow-y:hidden;" +
-		`border-top:1px solid ${BORDER};box-shadow:0 -4px 14px rgba(0,0,0,.10);` +
-		"background:var(--background-secondary-alt, rgba(127,127,127,.16));",
+		CARD + "display:flex;flex-direction:column;align-items:center;" +
+		"gap:7px;width:52px;padding:8px 0;overflow:hidden;",
+	ctxBarRow:
+		CARD + "display:flex;flex-direction:row;align-items:center;" +
+		`gap:7px;height:52px;width:max-content;max-width:calc(100% - ${CARD_EDGE * 2}px);` +
+		"padding:0 8px;overflow-x:auto;overflow-y:hidden;",
 
 	// Hand-rolled slider. An <input type=range> needs the browser's default touch
 	// handling, which Obsidian mobile claims for its sidebar swipe, so dragging one
@@ -120,9 +151,12 @@ export const S = {
 		BTN + "flex-direction:column;gap:3px;width:44px;height:auto;padding:7px 0 6px;margin-top:auto;" +
 		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);" +
 		"font-size:11px;line-height:1;font-weight:600;",
-	// On a phone the row has no room for the word; the accent still marks it
+	// In a row there is no room for the word; the accent still marks it
+	goRow:
+		BTN + "flex-direction:row;width:44px;height:40px;padding:0;" +
+		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);",
 	goNarrow:
-		BTN + "flex-direction:row;gap:5px;width:44px;height:36px;padding:0;margin-left:auto;" +
+		BTN + "flex-direction:row;gap:5px;width:44px;height:36px;padding:0;" +
 		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);" +
 		"font-size:13px;line-height:1;font-weight:600;",
 
@@ -135,9 +169,25 @@ export const S = {
 	// Added to a button's own style, to stack its icon over its caption
 	btnStacked: "flex-direction:column;gap:2px;",
 
-	version:
-		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +
-		`color:${MUTED};opacity:.55;text-align:center;`,
+	// The "⋯" menu: a card beside its button, each entry worded as well as drawn
+	menu:
+		"position:absolute;z-index:40;display:flex;flex-direction:column;gap:2px;padding:6px;margin:0;" +
+		"border-radius:12px;background:var(--background-primary, #fff);" +
+		`border:1px solid ${BORDER};box-shadow:0 6px 24px rgba(0,0,0,.18);`,
+	menuItem:
+		"display:flex;align-items:center;gap:10px;height:40px;padding:0 14px 0 10px;margin:0;border:0;" +
+		"border-radius:8px;background:transparent;font-size:14px;line-height:1;white-space:nowrap;" +
+		"text-align:left;cursor:pointer;box-shadow:none;-webkit-appearance:none;appearance:none;" +
+		"color:var(--text-normal, #222);",
+	// Added to an entry that throws something away
+	menuDanger: "color:var(--text-error, #e5484d);",
+	// The tool bar's place: a caption over a row of small screens
+	menuHead: `padding:6px 10px 2px;font-size:11px;line-height:1;color:${MUTED};`,
+	menuSides: "display:flex;gap:4px;padding:4px 6px 6px;",
+	sideBtn: BTN + `flex-direction:column;gap:2px;width:46px;height:46px;background:transparent;color:${MUTED};`,
+	sideBtnOn: BTN + `flex-direction:column;gap:2px;width:46px;height:46px;background:${HOVER};color:${ACCENT};`,
+	// Under the open menu and over everything else: a tap there only closes it
+	scrim: "position:absolute;inset:0;z-index:39;touch-action:none;",
 
 	// The stand-in caret in the note (see ghost.ts). Thicker than the real one
 	// and in the theme's accent, so it is not taken for it; it takes no room
@@ -191,6 +241,11 @@ export const ICONS = {
 	undo: ["M4 10h10.5a4.5 4.5 0 0 1 0 9H9", "M4 10l4-4", "M4 10l4 4"],
 	redo: ["M20 10H9.5a4.5 4.5 0 0 0 0 9H15", "M20 10l-4-4", "M20 10l-4 4"],
 	close: ["M6 6l12 12", "M18 6L6 18"],
+	more: [
+		solid("M4.4 12a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0"),
+		solid("M10.4 12a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0"),
+		solid("M16.4 12a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0"),
+	],
 	/* Moving the pad, drawn the way macOS and iPadOS draw window tiling: a
 	 * screen with the part the pad will take filled in, the right half or all
 	 * of it. Arrows or corners would read as "bigger", which is what the fit
@@ -203,6 +258,12 @@ export const ICONS = {
 		"M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
 		solid("M5 8a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"),
 	],
+	/* Where the tool bar goes, drawn the same way: a screen with a bar along
+	 * that edge */
+	left: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M4.5 7.5h3.5v9H4.5z")],
+	right: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M16 7.5h3.5v9H16z")],
+	top: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M4.5 7.5h15v3h-15z")],
+	bottom: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M4.5 13.5h15v3h-15z")],
 	/* Paper plane, after Lucide's "send" (ISC) */
 	send: [
 		"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
@@ -210,10 +271,11 @@ export const ICONS = {
 	],
 };
 
-/** Room the context bar takes from the page: on the right in the wide layout,
- *  along the bottom in the narrow one */
-export const CTX_W = 72;
-export const CTX_H = 58;
+/** The width bar's size across the edge it floats by: its width beside a
+ *  column, its height above a row. Its room is kept off the page even while
+ *  it is hidden. */
+export const CTX_W = 52;
+export const CTX_H = 52;
 
 /* The pad covers the whole screen, which means overriding Obsidian's own sizing
  * of .modal. Those rules differ between desktop and mobile and some may carry

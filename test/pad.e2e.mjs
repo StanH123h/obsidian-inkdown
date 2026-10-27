@@ -112,6 +112,39 @@ const state = () => js(`(() => { const p = __pad; return {
 	open: !!document.querySelector('.modal-container'), exit: __exit && { convert: __exit.convert, strokes: __exit.strokes.length },
 	notices: (window.__notices || []).slice() }; })()`);
 
+/** A finger's tap, as the touch screen makes it: touch, lift, then the click
+ *  the browser sends after, to whatever is under the finger by then */
+const tapAt = async (x, y, duration = 50) => {
+	await send("Input.synthesizeTapGesture", { x, y, duration, tapCount: 1, gestureSourceType: "touch" });
+	await new Promise((r) => setTimeout(r, 150));
+	await frame();
+};
+const where = (label) => js(`(() => { const b = [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(label)}); const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+const menuOpen = () => js("!!document.querySelector('[role=menu]')");
+/** Open the "⋯" menu and pick the entry with this text */
+const menu = async (label) => {
+	await button("More");
+	const r = await js(`(() => { const b = [...document.querySelectorAll('[role=menuitem]')].find(b => b.textContent === ${JSON.stringify(label)}); if (!b) return null; const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+	if (!r) throw new Error("no menu entry " + label);
+	await click(r[0], r[1]);
+};
+/** Every button of the tool bar, and whether each is wholly inside the box */
+const toolbarFits = (box = "document.documentElement") => js(`(() => { const t = __pad.tools, r = (${box}).getBoundingClientRect();
+	const out = [...t.querySelectorAll('button')].filter(b => { const q = b.getBoundingClientRect(); return q.left < r.left - 0.5 || q.top < r.top - 0.5 || q.right > r.right + 0.5 || q.bottom > r.bottom + 0.5; });
+	return { n: t.querySelectorAll('button').length, out: out.map(b => b.getAttribute('aria-label')), scrolls: t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1 }; })()`);
+/** Where the cards, the canvas and the dial are, and the page at its zoom */
+const layout = () => js(`(() => { const p = __pad, R = (e) => { if (!e.isConnected) return null; const r = e.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; };
+	const c = p.live.getBoundingClientRect(), sc = p.scale;
+	return { root: R(p.root), tools: R(p.tools), widths: R(p.ctxBar), canvas: R(p.live), dial: R(p.dial.el), zoom: p.zoom, panX: p.panX, panY: p.panY,
+		page: { l: c.left - p.panX * sc, t: c.top - p.panY * sc, r: c.left + (1000 - p.panX) * sc, b: c.top + (1414 - p.panY) * sc } }; })()`);
+const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
+const drag = async (from, to, steps = 12) => {
+	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: from[0], y: from[1], button: "left", buttons: 1, clickCount: 1 });
+	for (let i = 1; i <= steps; i++)
+		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from[0] + ((to[0] - from[0]) * i) / steps, y: from[1] + ((to[1] - from[1]) * i) / steps, button: "left", buttons: 1 });
+	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to[0], y: to[1], button: "left", buttons: 0, clickCount: 1 });
+	await frame();
+};
 async function viewport(width, height) {
 	await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: true });
 	await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
@@ -248,9 +281,59 @@ try {
 	await frame();
 	s = await state();
 	ok(s.zoom === 1, `pinching in stops at the whole page, zoom ${s.zoom}`);
-	await button("Whole page / page width");
+	await menu("Whole page / page width");
 	s = await state();
-	ok(s.zoom === 1, "fit resets the zoom");
+	ok(s.zoom === 1, "fit, from the ⋯ menu, resets the zoom");
+
+	/* ---- the ⋯ menu ---- */
+	const bar = await js(`(() => { const labels = [...__pad.tools.querySelectorAll('button')].map(b => b.getAttribute('aria-label')); return { labels, text: __pad.tools.textContent }; })()`);
+	ok(bar.labels.includes("More") && bar.labels.includes("Redo") && !bar.labels.includes("Whole page / page width") && !bar.labels.includes("Clear the page"), `the tool bar has ⋯ and redo, and no longer fit or clear: ${bar.labels.join(", ")}`);
+	ok(!/harness/.test(bar.text), `and no version printed on it: "${bar.text}"`);
+	await button("More");
+	const m = await js(`(() => { const m = document.querySelector('[role=menu]'), b = [...__pad.tools.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'More');
+		const r = m.getBoundingClientRect(), q = b.getBoundingClientRect(), d = __pad.root.getBoundingClientRect();
+		return { items: [...m.querySelectorAll('[role=menuitem]')].map(i => i.textContent), left: r.right <= q.left, inside: r.left >= d.left && r.top >= d.top && r.right <= d.right && r.bottom <= d.bottom, near: Math.abs(r.top - q.top) < 1 }; })()`);
+	ok(m.items.join() === "Whole page / page width,Clear the page", `the menu holds fit and clear, worded: ${m.items}`);
+	ok(m.left && m.inside && m.near, `it opens beside its button, toward the page, all on screen: ${JSON.stringify(m)}`);
+	// A tap elsewhere closes it and writes nothing, even as a stroke
+	const strokesBefore = (await state()).strokes;
+	await pen(line(200, 700, 400, 700));
+	s = await state();
+	ok(s.strokes === strokesBefore && !(await js("!!document.querySelector('[role=menu]')")), `a stroke started outside the open menu only closes it: ${strokesBefore} → ${s.strokes} strokes`);
+	await pen(line(200, 700, 400, 700));
+	ok((await state()).strokes === strokesBefore + 1, "and the next one writes");
+	// With a finger: the click after the lift must not open it again, nor
+	// press whatever else was under the finger
+	await tapAt(...(await where("More")));
+	ok(await menuOpen(), "a finger's tap on ⋯ opens the menu");
+	await tapAt(...(await where("More")));
+	ok(!(await menuOpen()), "and a second tap on ⋯ closes it, rather than closing and opening it again");
+	await tapAt(...(await where("More")));
+	ok(await menuOpen(), "and the next tap opens it again");
+	await tapAt(...(await where("Lasso: circle ink to move it")));
+	s = await state();
+	ok(!(await menuOpen()) && s.tool === "pen", `a tap on another tool only closes the menu, the tool stays: ${s.tool}`);
+	await tapAt(...(await where("Lasso: circle ink to move it")));
+	ok((await state()).tool === "lasso", "and the next tap on it takes it");
+	await button("Pen");
+	// A drag sends no click at the end: closing the menu with one must leave
+	// the next real tap alone, and must not move the page either
+	await tapAt(...(await where("More")));
+	const view0 = await state();
+	await touch("touchStart", [[300, 600]]);
+	for (let i = 1; i <= 8; i++) await touch("touchMove", [[300 + i * 20, 600 - i * 10]]);
+	await touch("touchEnd", []);
+	await new Promise((r) => setTimeout(r, 200));
+	s = await state();
+	ok(!(await menuOpen()) && s.panX === view0.panX && s.panY === view0.panY, `a finger dragged outside the menu closes it and moves nothing: pan ${view0.panX},${view0.panY} → ${s.panX},${s.panY}`);
+	await tapAt(...(await where("Lasso: circle ink to move it")));
+	ok((await state()).tool === "lasso", "and the next tap after it is not swallowed");
+	await button("Pen");
+	await menu("Clear the page");
+	ok((await state()).strokes === 0, "clear, from the ⋯ menu, empties the page");
+	await button("Undo");
+	ok((await state()).strokes === strokesBefore + 1, "and undo brings it all back");
+	await button("Undo");
 
 	/* ---- lasso ---- */
 	await button("Lasso: circle ink to move it");
@@ -452,6 +535,184 @@ try {
 	ok(u.strokes === 2, "redo works across closing and opening again");
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- the cards: floating over the canvas, clear of the page ---- */
+	for (const [w, hgt, name] of [[820, 1180, "upright"], [1180, 820, "landscape"]]) {
+		await viewport(w, hgt);
+		await js("openPad([])");
+		await new Promise((r) => setTimeout(r, 300));
+		const L = await layout();
+		ok(L.canvas.w === w && L.canvas.h === hgt, `${name}: the canvas fills the pad: ${L.canvas.w}×${L.canvas.h}`);
+		ok(near(L.tools.r, w - 12) && near(L.tools.t + L.tools.h / 2, hgt / 2), `${name}: the tool bar floats 12px in from the right edge, at its middle: ${JSON.stringify(L.tools)}`);
+		ok(near(L.widths.r, L.tools.l - 8) && near(L.widths.t, L.tools.t), `${name}: the widths sit beside it, tops level: ${JSON.stringify(L.widths)}`);
+		ok(L.page.r <= L.widths.l - 8, `${name}: the page opens clear of the cards: page right ${L.page.r.toFixed(0)}, widths at ${L.widths.l.toFixed(0)}`);
+		await button("Lasso: circle ink to move it");
+		const L2 = await layout();
+		ok(L2.widths === null && L2.zoom === L.zoom && L2.panX === L.panX && L2.panY === L.panY, `${name}: the widths go with the pen, and the page stays put`);
+		await button("Pen");
+		await button("Close (your writing is kept for next time)");
+	}
+	// The dial can be left on a card, as anywhere else: it stays where it is
+	// put, over the card, so its middle can still be taken to drag it off
+	await viewport(820, 1180);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	let L = await layout();
+	const onBar = [L.tools.l + 10, L.tools.t + L.tools.h / 2];
+	await drag([L.dial.l + L.dial.w / 2, L.dial.t + L.dial.h / 2], onBar);
+	L = await layout();
+	const onTop = await js(`__pad.dial.el.contains(document.elementFromPoint(${onBar[0]}, ${onBar[1]}))`);
+	ok(near(L.dial.l + L.dial.w / 2, onBar[0], 3) && near(L.dial.t + L.dial.h / 2, onBar[1], 3) && onTop, `the dial let go on the tool bar stays there, on top of it: centre ${(L.dial.l + L.dial.w / 2).toFixed(0)},${(L.dial.t + L.dial.h / 2).toFixed(0)}, on top ${onTop}`);
+	await drag(onBar, [300, 300]);
+	L = await layout();
+	ok(near(L.dial.l + L.dial.w / 2, 300, 3) && near(L.dial.t + L.dial.h / 2, 300, 3), "and is dragged off it again by its middle");
+	await js("settings.dialX = -1; settings.dialY = -1; __pad.placeDial()");
+	await button("Close (your writing is kept for next time)");
+	// A short window: the tool bar takes a second column rather than losing
+	// buttons off the bottom
+	await viewport(1000, 420);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	const short = await toolbarFits();
+	ok(!short.out.length && !short.scrolls, `a short window: every tool bar button on screen, in two columns: ${JSON.stringify(short)}`);
+	await shot("short");
+	await button("Close (your writing is kept for next time)");
+	await viewport(820, 1180);
+
+	/* ---- moving the tool bar ---- */
+	await viewport(820, 1180);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	for (const y of [300, 360]) await pen(line(150, y, 400, y));
+	const view = async () => { const l = await layout(); return { zoom: l.zoom, panX: l.panX, panY: l.panY }; };
+	const strokes = async () => (await state()).strokes;
+	const v0 = await view();
+	await tapAt(...(await where("Undo")));
+	ok(await strokes() === 1, "a quick tap on the tool bar still presses the button");
+	await button("Redo");
+	// A press that wanders before the moment is up is not a hold
+	let at = await where("Undo");
+	await touch("touchStart", [at]);
+	await touch("touchMove", [[at[0] - 30, at[1]]]);
+	await new Promise((r) => setTimeout(r, 450));
+	ok(!(await js("!!__pad.drag")), "a press that moves off at once does not take the tool bar up");
+	await touch("touchEnd", []);
+	await frame();
+	// Held, it lifts: the page shaded, a place outlined at each edge, the
+	// nearest lit up, the tool bar following the finger
+	at = await where("Undo");
+	await touch("touchStart", [at]);
+	await new Promise((r) => setTimeout(r, 420));
+	for (let i = 1; i <= 10; i++) await touch("touchMove", [[at[0] + (60 - at[0]) * i / 10, at[1] + (590 - at[1]) * i / 10]]);
+	const mid = await js(`(() => { const d = __pad.drag; return d && { slots: d.slots.size, near: d.near, shaded: d.shade.isConnected, lit: [...d.slots].filter(([, s]) => /solid/.test(s.el.getAttribute('style'))).map(([k]) => k), moved: /translate/.test(__pad.tools.style.transform), widths: __pad.ctxBar.isConnected }; })()`);
+	ok(mid && mid.slots === 4 && mid.near === "left" && mid.lit.join() === "left" && mid.shaded && mid.moved && !mid.widths, `held, the tool bar is taken up: ${JSON.stringify(mid)}`);
+	await touch("touchEnd", []);
+	await new Promise((r) => setTimeout(r, 150));
+	let M = await layout();
+	ok(await js("settings.toolbarSide") === "left" && near(M.tools.l, 12) && near(M.widths.l, M.tools.r + 8) && near(M.widths.t, M.tools.t) && M.tools.h > M.tools.w, `let go by the left edge, it goes there, a column, the widths beside it: ${JSON.stringify(M.tools)}`);
+	ok(!(await js("!!__pad.drag")) && !M.tools.transform && await strokes() === 2, "the shade is gone, and the button it was held by was not pressed");
+	const v1 = await view();
+	ok(v1.zoom === v0.zoom && v1.panX === v0.panX && v1.panY === v0.panY, "and the page stayed where it was");
+	// Nor does it jump on the next touch, as it would if the move had already
+	// changed the room it is kept within
+	const p0 = (await layout()).page;
+	await touch("touchStart", [[400, 800]]);
+	for (let i = 1; i <= 4; i++) await touch("touchMove", [[400 + i * 5, 800]]);
+	await touch("touchEnd", []);
+	await new Promise((r) => setTimeout(r, 600));
+	const p1 = (await layout()).page;
+	ok(near(p1.l, p0.l, 1) && near(p1.t, p0.t, 1), `and the next drag of the page does not make it jump: left ${p0.l.toFixed(0)} → ${p1.l.toFixed(0)}`);
+	// Held and let go in place: back where it was, and still no press
+	await tapAt(...(await where("Undo")), 450);
+	ok(await js("settings.toolbarSide") === "left" && await strokes() === 2, "held and let go where it is: it stays, and the button is not pressed");
+	// Fitting lays the page out clear of the cards where they are now
+	await menu("Whole page / page width");
+	M = await layout();
+	ok(M.page.l >= M.widths.r + 8 - 0.5, `fit puts the page clear of the cards on the left: page from ${M.page.l.toFixed(0)}, widths to ${M.widths.r.toFixed(0)}`);
+	// The grip is easy to take hold of: wider and taller than its bar
+	const handle = await js(`(() => { const g = __pad.grip, r = g.getBoundingClientRect(), b = g.firstElementChild.getBoundingClientRect();
+		const pts = [[r.left + 3, r.top + 2], [r.right - 3, r.bottom - 2], [b.left + b.width / 2, b.top - 4], [b.left + b.width / 2, b.bottom + 4]];
+		return { size: [r.width, r.height], bar: [b.width, b.height], held: pts.map(([x, y]) => g.contains(document.elementFromPoint(x, y))) }; })()`);
+	ok(Math.min(...handle.size) >= 14 && handle.held.every(Boolean), `the grip takes the mouse well around its bar: ${JSON.stringify(handle)}`);
+	// A mouse takes it by the grip straight away
+	const grip = await js("(() => { const r = __pad.grip.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+	await drag(grip, [410, 30], 10);
+	await new Promise((r) => setTimeout(r, 150));
+	M = await layout();
+	ok(await js("settings.toolbarSide") === "top" && near(M.tools.t, 12) && near(M.tools.l + M.tools.w / 2, 410) && M.tools.w > M.tools.h && near(M.widths.t, M.tools.b + 8), `a mouse drags it by the grip to the top: a row, the widths below it: ${JSON.stringify(M.tools)}`);
+	const top = await toolbarFits();
+	ok(!top.out.length && !top.scrolls, `every button in the row on screen: ${JSON.stringify(top)}`);
+	await shot("toolbar-top");
+	// The ⋯ menu offers the four places, the one in use marked
+	await button("More");
+	const places = await js("[...document.querySelectorAll('[role=menuitemradio]')].map(b => b.getAttribute('aria-label') + (b.getAttribute('aria-checked') === 'true' ? '*' : ''))");
+	ok(places.join() === "Left,Right,Top*,Bottom", `the ⋯ menu offers the four places, top marked: ${places}`);
+	await shot("toolbar-menu");
+	await button("Bottom");
+	M = await layout();
+	ok(await js("settings.toolbarSide") === "bottom" && near(M.tools.b, 1180 - 12) && near(M.widths.b, M.tools.t - 8), `picked from the menu, it goes to the foot: ${JSON.stringify(M.tools)}`);
+	// Opened again, the page is laid out clear of it
+	await button("Close (your writing is kept for next time)");
+	await js("reopenPad()");
+	await new Promise((r) => setTimeout(r, 300));
+	M = await layout();
+	ok(M.page.b <= M.widths.t - 8 + 0.5, `opened again, the page is clear of the cards at the foot: page to ${M.page.b.toFixed(0)}, widths from ${M.widths.t.toFixed(0)}`);
+	await button("Close (your writing is kept for next time)");
+	// A narrow pad has rows only: top or foot
+	await js("settings.toolbarSide = 'left'");
+	await viewport(390, 844);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	M = await layout();
+	ok(near(M.tools.b, 844 - 12), "on a phone, a tool bar set to the left sits at the foot");
+	// At the top it spans the width; the dial, never moved, starts below it
+	await js("__pad.moveToolbar('top')");
+	M = await layout();
+	ok(M.dial.t >= M.widths.b, `a phone's tool bar at the top: the dial starts below the cards, not over its buttons: dial from ${M.dial.t.toFixed(0)}, cards to ${M.widths.b.toFixed(0)}`);
+	await js("__pad.moveToolbar('left')");
+	await button("More");
+	const phonePlaces = await js("[...document.querySelectorAll('[role=menuitemradio]')].map(b => b.getAttribute('aria-label'))");
+	ok(phonePlaces.join() === "Top,Bottom", `and the ⋯ menu offers top and foot only: ${phonePlaces}`);
+	await click(195, 300);
+	at = await where("Undo");
+	await touch("touchStart", [at]);
+	await new Promise((r) => setTimeout(r, 420));
+	for (let i = 1; i <= 8; i++) await touch("touchMove", [[at[0] + (20 - at[0]) * i / 8, at[1] + (600 - at[1]) * i / 8]]);
+	const phoneDrag = await js("__pad.drag && [...__pad.drag.slots.keys()]");
+	await touch("touchEnd", []);
+	await new Promise((r) => setTimeout(r, 150));
+	ok(phoneDrag && phoneDrag.join() === "top,bottom" && await js("settings.toolbarSide") === "bottom", `dragged toward the left, a phone offers top and foot, and the nearer wins: ${phoneDrag} → ${await js("settings.toolbarSide")}`);
+	await button("Close (your writing is kept for next time)");
+	// The hint: shown until tapped, or until the tool bar is moved
+	await viewport(820, 1180);
+	await js("settings.toolbarSide = 'right'; settings.toolbarHintSeen = false");
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	const hint = await js(`(() => { const h = __pad.hint; if (!h) return null; const r = h.getBoundingClientRect(), t = __pad.tools.getBoundingClientRect(), a = h.lastElementChild.getBoundingClientRect();
+		return { text: h.textContent, above: r.bottom <= t.top, arrowOverGrip: a.left < t.left + t.width / 2 && a.right > t.left + t.width / 2 }; })()`);
+	ok(hint && hint.text === "Hold to drag" && hint.above && hint.arrowOverGrip, `a first open shows the hint over the tool bar, pointing at the grip: ${JSON.stringify(hint)}`);
+	await shot("toolbar-hint");
+	const hr = await js("(() => { const r = __pad.hint.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+	await tapAt(...hr);
+	ok(!(await js("!!__pad.hint")) && await js("settings.toolbarHintSeen") === true && await strokes() === 0, "tapped, it goes for good, and writes nothing");
+	await button("Close (your writing is kept for next time)");
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	ok(!(await js("!!__pad.hint")), "and is not shown again");
+	await button("Close (your writing is kept for next time)");
+	await js("settings.toolbarHintSeen = false");
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	at = await where("Pen");
+	await touch("touchStart", [at]);
+	await new Promise((r) => setTimeout(r, 420));
+	await touch("touchMove", [[at[0] - 20, at[1]]]);
+	ok(!(await js("!!__pad.hint")), "taking the tool bar up puts the hint away");
+	await touch("touchEnd", []);
+	await new Promise((r) => setTimeout(r, 150));
+	ok(await js("settings.toolbarHintSeen") === true, "and moving it counts as having learnt it");
+	await button("Close (your writing is kept for next time)");
+	await js("settings.toolbarSide = 'right'; settings.toolbarHintSeen = true");
+
 	/* ---- in a pane, and moving between hosts ---- */
 	await viewport(1180, 820);   // landscape, the way split view is used
 	await js("openSwappable(590, 820)");
@@ -471,7 +732,7 @@ try {
 		split: !!document.querySelector('button[aria-label="Open beside the note"]') }; })()`);
 	let h = await host();
 	ok(!h.modal && h.strokes === 2 && h.undo === 2, `moving into the pane keeps the page and its undo history: ${JSON.stringify(h)}`);
-	ok(h.c[0] > 300 && h.c[0] < 590 && h.c[1] > 700, `the canvas fits the pane: ${h.c}`);
+	ok(h.c[0] === 590 && h.c[1] === 820, `the canvas fills the pane, the cards floating over it: ${h.c}`);
 	ok(h.widthFit, "the page fills the pane's width, rather than keeping a zoom made for the whole screen");
 	ok(h.full && !h.split && h.modalKeys === 0 && h.paneKeys === keys && keys > 0, `the pane offers full screen, and the shortcuts moved with the pad: ${h.modalKeys} left behind, ${h.paneKeys} of ${keys} in the pane`);
 	await shot("pane");
@@ -482,6 +743,10 @@ try {
 	await new Promise((r) => setTimeout(r, 300));
 	h = await host();
 	ok(h.narrow === true && h.c[0] <= 360 && h.c[0] > 300, `a narrow pane gets the narrow layout, and the canvas follows: ${JSON.stringify(h)}`);
+	const tf = await toolbarFits("__pad.root");
+	const rows = await js("__pad.tools.offsetHeight");
+	ok(!tf.out.length && !tf.scrolls && rows > 60, `every tool bar button is in the narrow pane, on a second row: ${JSON.stringify(tf)}, ${rows}px tall`);
+	await shot("pane-narrow");
 	await js("resizePane(590, 820)");
 	await new Promise((r) => setTimeout(r, 300));
 	await button("Turn this into Markdown at the cursor");
@@ -547,6 +812,20 @@ try {
 		const g = await js(`(() => { const m = document.querySelector('.modal').getBoundingClientRect(); const go = [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Turn this into Markdown at the cursor').getBoundingClientRect(); return { m: [m.width, m.height], go: [go.x, go.y, go.width, go.height] }; })()`);
 		ok(g.m[0] === w && g.m[1] === h, `${name}: full screen, got ${g.m}`);
 		ok(g.go[0] >= 0 && g.go[1] >= 0 && g.go[0] + g.go[2] <= w + 0.5 && g.go[1] + g.go[3] <= h + 0.5, `${name}: convert button on screen at ${g.go.map((v) => v.toFixed(0))}`);
+		const tf = await toolbarFits();
+		ok(!tf.out.length && !tf.scrolls, `${name}: every tool bar button on screen, redo included: ${JSON.stringify(tf)}`);
+		if (name === "phone") {
+			const P = await layout();
+			ok(near(P.tools.b, h - 12) && near(P.tools.l + P.tools.w / 2, w / 2) && P.tools.h < 60, `phone: one row floating 12px above the foot, centred: ${JSON.stringify(P.tools)}`);
+			ok(near(P.widths.b, P.tools.t - 8) && near(P.widths.l + P.widths.w / 2, w / 2), `phone: the widths just above it: ${JSON.stringify(P.widths)}`);
+			ok(P.page.b <= P.widths.t - 8, `phone: the page opens clear of them: page foot ${P.page.b.toFixed(0)}, widths from ${P.widths.t.toFixed(0)}`);
+		}
+		await button("More");
+		const mi = await js(`(() => { const r = document.querySelector('[role=menu]').getBoundingClientRect(), q = [...__pad.tools.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'More').getBoundingClientRect();
+			const clear = r.right <= q.left || r.left >= q.right || r.bottom <= q.top || r.top >= q.bottom; return [r.left, r.top, r.right, r.bottom, clear]; })()`);
+		ok(mi[0] >= 0 && mi[1] >= 0 && mi[2] <= w && mi[3] <= h && mi[4], `${name}: the ⋯ menu opens on screen, clear of its button: ${mi.map((v) => typeof v === "number" ? v.toFixed(0) : v)}`);
+		await shot(name + "-menu");
+		await click(w / 2, h / 3);
 		await shot(name);
 		await button("Close (your writing is kept for next time)");
 	}

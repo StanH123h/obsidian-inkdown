@@ -1,6 +1,6 @@
 import { App, MarkdownView, Modal, Notice, Platform, Plugin, PluginSettingTab, SecretComponent, Setting, TFile, editorInfoField } from "obsidian";
 import type { EditorView } from "@codemirror/view";
-import { InkPad, PadMode, PadModal } from "./pad";
+import { InkPad, PadMode, PadModal, ToolbarSide } from "./pad";
 import { PAD_VIEW, PadView } from "./padview";
 import { ghostCaret, refreshGhosts } from "./ghost";
 import { InkOpts, Stroke, rasterize } from "./ink";
@@ -45,6 +45,12 @@ export interface HandwritingSettings {
 	/** How the pad opens: the way it was last used, set by its own button.
 	 *  Beside the note until changed; a phone always has it full screen. */
 	padMode: PadMode;
+	/** Which edge the tool bar floats by, wherever the pad is shown. A narrow
+	 *  pad has room for a row only: top stays top, the rest go to the foot. */
+	toolbarSide: ToolbarSide;
+	/** Whether the hint on moving the tool bar has done its job: shown until
+	 *  the tool bar has been moved, or the hint tapped */
+	toolbarHintSeen: boolean;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -71,6 +77,8 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	dialX: -1,
 	dialY: -1,
 	padMode: "split",
+	toolbarSide: "right",
+	toolbarHintSeen: false,
 };
 
 export default class HandwritingPlugin extends Plugin {
@@ -462,6 +470,8 @@ export default class HandwritingPlugin extends Plugin {
 		s.eraserSize = Number.isFinite(n) && n >= SIZE_MIN && n <= SIZE_MAX ? n : DEFAULT_SETTINGS.eraserSize;
 		if (s.eraserMode !== "precise") s.eraserMode = "stroke";
 		if (s.padMode !== "full") s.padMode = "split";
+		if (!["left", "right", "top", "bottom"].includes(s.toolbarSide)) s.toolbarSide = "right";
+		if (typeof s.toolbarHintSeen !== "boolean") s.toolbarHintSeen = false;
 		const saved = Array.isArray(s.sizes) ? s.sizes : [];
 		s.sizes = DEFAULT_SETTINGS.sizes.map((d, i) => {
 			const v = Number(saved[i]);
