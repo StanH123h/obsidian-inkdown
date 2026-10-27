@@ -21,6 +21,7 @@ const STR = {
 	"tool.undo": ["Undo", "撤销"],
 	"tool.redo": ["Redo", "重做"],
 	"tool.clear": ["Clear the page", "清空整页"],
+	"tool.more": ["More", "更多"],
 	"tool.close": ["Close (your writing is kept for next time)", "关闭（字迹会留到下次）"],
 	"tool.convert": ["Convert", "转换"],
 	"tool.convertHint": ["Turn this into Markdown at the cursor", "转成 Markdown，插到光标处"],

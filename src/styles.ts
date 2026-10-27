@@ -135,9 +135,20 @@ export const S = {
 	// Added to a button's own style, to stack its icon over its caption
 	btnStacked: "flex-direction:column;gap:2px;",
 
-	version:
-		"flex:0 0 auto;margin-top:4px;font-size:9px;line-height:1.2;letter-spacing:.02em;" +
-		`color:${MUTED};opacity:.55;text-align:center;`,
+	// The "⋯" menu: a card beside its button, each entry worded as well as drawn
+	menu:
+		"position:absolute;z-index:40;display:flex;flex-direction:column;gap:2px;padding:6px;margin:0;" +
+		"border-radius:12px;background:var(--background-primary, #fff);" +
+		`border:1px solid ${BORDER};box-shadow:0 6px 24px rgba(0,0,0,.18);`,
+	menuItem:
+		"display:flex;align-items:center;gap:10px;height:40px;padding:0 14px 0 10px;margin:0;border:0;" +
+		"border-radius:8px;background:transparent;font-size:14px;line-height:1;white-space:nowrap;" +
+		"text-align:left;cursor:pointer;box-shadow:none;-webkit-appearance:none;appearance:none;" +
+		"color:var(--text-normal, #222);",
+	// Added to an entry that throws something away
+	menuDanger: "color:var(--text-error, #e5484d);",
+	// Under the open menu and over everything else: a tap there only closes it
+	scrim: "position:absolute;inset:0;z-index:39;touch-action:none;",
 
 	// The stand-in caret in the note (see ghost.ts). Thicker than the real one
 	// and in the theme's accent, so it is not taken for it; it takes no room
@@ -191,6 +202,11 @@ export const ICONS = {
 	undo: ["M4 10h10.5a4.5 4.5 0 0 1 0 9H9", "M4 10l4-4", "M4 10l4 4"],
 	redo: ["M20 10H9.5a4.5 4.5 0 0 0 0 9H15", "M20 10l-4-4", "M20 10l-4 4"],
 	close: ["M6 6l12 12", "M18 6L6 18"],
+	more: [
+		solid("M4.4 12a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0"),
+		solid("M10.4 12a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0"),
+		solid("M16.4 12a1.6 1.6 0 1 0 3.2 0a1.6 1.6 0 1 0-3.2 0"),
+	],
 	/* Moving the pad, drawn the way macOS and iPadOS draw window tiling: a
 	 * screen with the part the pad will take filled in, the right half or all
 	 * of it. Arrows or corners would read as "bigger", which is what the fit

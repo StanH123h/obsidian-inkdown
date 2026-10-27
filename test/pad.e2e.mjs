@@ -112,6 +112,26 @@ const state = () => js(`(() => { const p = __pad; return {
 	open: !!document.querySelector('.modal-container'), exit: __exit && { convert: __exit.convert, strokes: __exit.strokes.length },
 	notices: (window.__notices || []).slice() }; })()`);
 
+/** A finger's tap, as the touch screen makes it: touch, lift, then the click
+ *  the browser sends after, to whatever is under the finger by then */
+const tapAt = async (x, y) => {
+	await send("Input.synthesizeTapGesture", { x, y, duration: 50, tapCount: 1, gestureSourceType: "touch" });
+	await new Promise((r) => setTimeout(r, 150));
+	await frame();
+};
+const where = (label) => js(`(() => { const b = [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === ${JSON.stringify(label)}); const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+const menuOpen = () => js("!!document.querySelector('[role=menu]')");
+/** Open the "⋯" menu and pick the entry with this text */
+const menu = async (label) => {
+	await button("More");
+	const r = await js(`(() => { const b = [...document.querySelectorAll('[role=menuitem]')].find(b => b.textContent === ${JSON.stringify(label)}); if (!b) return null; const r = b.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+	if (!r) throw new Error("no menu entry " + label);
+	await click(r[0], r[1]);
+};
+/** Every button of the tool bar, and whether each is wholly inside the box */
+const toolbarFits = (box = "document.documentElement") => js(`(() => { const t = __pad.tools, r = (${box}).getBoundingClientRect();
+	const out = [...t.querySelectorAll('button')].filter(b => { const q = b.getBoundingClientRect(); return q.left < r.left - 0.5 || q.top < r.top - 0.5 || q.right > r.right + 0.5 || q.bottom > r.bottom + 0.5; });
+	return { n: t.querySelectorAll('button').length, out: out.map(b => b.getAttribute('aria-label')), scrolls: t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1 }; })()`);
 async function viewport(width, height) {
 	await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: true });
 	await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
@@ -248,9 +268,59 @@ try {
 	await frame();
 	s = await state();
 	ok(s.zoom === 1, `pinching in stops at the whole page, zoom ${s.zoom}`);
-	await button("Whole page / page width");
+	await menu("Whole page / page width");
 	s = await state();
-	ok(s.zoom === 1, "fit resets the zoom");
+	ok(s.zoom === 1, "fit, from the ⋯ menu, resets the zoom");
+
+	/* ---- the ⋯ menu ---- */
+	const bar = await js(`(() => { const labels = [...__pad.tools.querySelectorAll('button')].map(b => b.getAttribute('aria-label')); return { labels, text: __pad.tools.textContent }; })()`);
+	ok(bar.labels.includes("More") && bar.labels.includes("Redo") && !bar.labels.includes("Whole page / page width") && !bar.labels.includes("Clear the page"), `the tool bar has ⋯ and redo, and no longer fit or clear: ${bar.labels.join(", ")}`);
+	ok(!/harness/.test(bar.text), `and no version printed on it: "${bar.text}"`);
+	await button("More");
+	const m = await js(`(() => { const m = document.querySelector('[role=menu]'), b = [...__pad.tools.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'More');
+		const r = m.getBoundingClientRect(), q = b.getBoundingClientRect(), d = __pad.root.getBoundingClientRect();
+		return { items: [...m.querySelectorAll('[role=menuitem]')].map(i => i.textContent), left: r.right <= q.left, inside: r.left >= d.left && r.top >= d.top && r.right <= d.right && r.bottom <= d.bottom, near: Math.abs(r.top - q.top) < 1 }; })()`);
+	ok(m.items.join() === "Whole page / page width,Clear the page", `the menu holds fit and clear, worded: ${m.items}`);
+	ok(m.left && m.inside && m.near, `it opens beside its button, toward the page, all on screen: ${JSON.stringify(m)}`);
+	// A tap elsewhere closes it and writes nothing, even as a stroke
+	const strokesBefore = (await state()).strokes;
+	await pen(line(200, 700, 400, 700));
+	s = await state();
+	ok(s.strokes === strokesBefore && !(await js("!!document.querySelector('[role=menu]')")), `a stroke started outside the open menu only closes it: ${strokesBefore} → ${s.strokes} strokes`);
+	await pen(line(200, 700, 400, 700));
+	ok((await state()).strokes === strokesBefore + 1, "and the next one writes");
+	// With a finger: the click after the lift must not open it again, nor
+	// press whatever else was under the finger
+	await tapAt(...(await where("More")));
+	ok(await menuOpen(), "a finger's tap on ⋯ opens the menu");
+	await tapAt(...(await where("More")));
+	ok(!(await menuOpen()), "and a second tap on ⋯ closes it, rather than closing and opening it again");
+	await tapAt(...(await where("More")));
+	ok(await menuOpen(), "and the next tap opens it again");
+	await tapAt(...(await where("Lasso: circle ink to move it")));
+	s = await state();
+	ok(!(await menuOpen()) && s.tool === "pen", `a tap on another tool only closes the menu, the tool stays: ${s.tool}`);
+	await tapAt(...(await where("Lasso: circle ink to move it")));
+	ok((await state()).tool === "lasso", "and the next tap on it takes it");
+	await button("Pen");
+	// A drag sends no click at the end: closing the menu with one must leave
+	// the next real tap alone, and must not move the page either
+	await tapAt(...(await where("More")));
+	const view0 = await state();
+	await touch("touchStart", [[300, 600]]);
+	for (let i = 1; i <= 8; i++) await touch("touchMove", [[300 + i * 20, 600 - i * 10]]);
+	await touch("touchEnd", []);
+	await new Promise((r) => setTimeout(r, 200));
+	s = await state();
+	ok(!(await menuOpen()) && s.panX === view0.panX && s.panY === view0.panY, `a finger dragged outside the menu closes it and moves nothing: pan ${view0.panX},${view0.panY} → ${s.panX},${s.panY}`);
+	await tapAt(...(await where("Lasso: circle ink to move it")));
+	ok((await state()).tool === "lasso", "and the next tap after it is not swallowed");
+	await button("Pen");
+	await menu("Clear the page");
+	ok((await state()).strokes === 0, "clear, from the ⋯ menu, empties the page");
+	await button("Undo");
+	ok((await state()).strokes === strokesBefore + 1, "and undo brings it all back");
+	await button("Undo");
 
 	/* ---- lasso ---- */
 	await button("Lasso: circle ink to move it");
@@ -547,6 +617,14 @@ try {
 		const g = await js(`(() => { const m = document.querySelector('.modal').getBoundingClientRect(); const go = [...document.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'Turn this into Markdown at the cursor').getBoundingClientRect(); return { m: [m.width, m.height], go: [go.x, go.y, go.width, go.height] }; })()`);
 		ok(g.m[0] === w && g.m[1] === h, `${name}: full screen, got ${g.m}`);
 		ok(g.go[0] >= 0 && g.go[1] >= 0 && g.go[0] + g.go[2] <= w + 0.5 && g.go[1] + g.go[3] <= h + 0.5, `${name}: convert button on screen at ${g.go.map((v) => v.toFixed(0))}`);
+		const tf = await toolbarFits();
+		ok(!tf.out.length && !tf.scrolls, `${name}: every tool bar button on screen, redo included: ${JSON.stringify(tf)}`);
+		await button("More");
+		const mi = await js(`(() => { const r = document.querySelector('[role=menu]').getBoundingClientRect(), q = [...__pad.tools.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'More').getBoundingClientRect();
+			const clear = r.right <= q.left || r.left >= q.right || r.bottom <= q.top || r.top >= q.bottom; return [r.left, r.top, r.right, r.bottom, clear]; })()`);
+		ok(mi[0] >= 0 && mi[1] >= 0 && mi[2] <= w && mi[3] <= h && mi[4], `${name}: the ⋯ menu opens on screen, clear of its button: ${mi.map((v) => typeof v === "number" ? v.toFixed(0) : v)}`);
+		await shot(name + "-menu");
+		await click(w / 2, h / 3);
 		await shot(name);
 		await button("Close (your writing is kept for next time)");
 	}

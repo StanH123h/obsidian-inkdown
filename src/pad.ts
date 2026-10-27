@@ -8,10 +8,6 @@ import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
 import { buildEraserDial, Dial } from "./dial";
 
-/** Injected by esbuild at build time; see esbuild.config.mjs */
-declare const __HW_VERSION__: string;
-declare const __HW_BUILD__: string;
-
 const EDGE_PAD = 12;   // css px
 /* A tap with two fingers undoes, with three redoes: each finger lands within
  * MULTI_TAP_GAP of the one before, all are off the glass within MULTI_TAP_UP
@@ -213,6 +209,9 @@ export class InkPad {
 	private lastSize = { w: 0, h: 0 };
 	/** Whether the pad is on screen: a parked one can still be handed a page */
 	private mounted = false;
+	/** The open "⋯" menu, and the scrim under it */
+	private menu: HTMLElement | null = null;
+	private scrim: HTMLElement | null = null;
 
 	/** Whoever shows the pad now; set on each mount, since the pad can move */
 	private host!: PadHost;
@@ -321,6 +320,7 @@ export class InkPad {
 		// Each mount makes its own canvases. Emptied now, these do not keep two
 		// screens' worth of pixels for as long as the pad is parked.
 		for (const c of [this.base, this.live]) { c.width = 0; c.height = 0; }
+		this.closeMenu();
 		this.mounted = false;
 		this.root.remove();
 		return this.strokes;
@@ -420,6 +420,8 @@ export class InkPad {
 	private buildToolbar() {
 		const bar = this.tools;
 		bar.empty();
+		// Its button is gone; a menu left open would point at nothing
+		this.closeMenu();
 
 		const off = this.narrow ? S.btnSm : S.btn, on = this.narrow ? S.btnSmOn : S.btnOn;
 		const btn = (icon: keyof typeof ICONS, title: string, cb: () => void) => {
@@ -446,12 +448,9 @@ export class InkPad {
 		aiBtn.createDiv({ text: "AI", attr: { style: S.btnBadge + `color:${NOTE_INK};` } });
 		const lasBtn = btn("lasso", t("tool.lasso"), () => this.setTool("lasso"));
 		sep();
-		btn("fit", t("tool.fit"), () => this.fitPage());
 		btn("undo", t("tool.undo"), () => this.undo());
-		// A phone's row has no room for it; three fingers and Mod+Shift+Z redo
-		// there too
-		if (!this.narrow) btn("redo", t("tool.redo"), () => this.redo());
-		btn("trash", t("tool.clear"), () => this.clearPage());
+		btn("redo", t("tool.redo"), () => this.redo());
+		const more: HTMLElement = btn("more", t("tool.more"), () => this.openMenu(more));
 
 		const go = bar.createEl("button", {
 			attr: { "aria-label": t("tool.convertHint"), title: t("tool.convertHint"), style: this.narrow ? S.goNarrow : S.go },
@@ -460,16 +459,6 @@ export class InkPad {
 		if (!this.narrow) go.createSpan({ text: t("tool.convert") });
 		go.addEventListener("click", () => this.tryConvert());
 
-		// The version is printed on the tool bar: when debugging across a sync
-		// service it is the fastest way to confirm which build is running. It comes
-		// from the bundle, not from manifest.json, because those are separate
-		// files and a sync service can deliver them at different times. A phone
-		// has no room for it; the diagnostics command reports it too.
-		if (!this.narrow) {
-			const v = bar.createDiv({ text: "v" + __HW_VERSION__, attr: { style: S.version } });
-			if (__HW_BUILD__) v.createDiv({ text: __HW_BUILD__ });
-		}
-
 		this.syncTools = () => {
 			this.dial?.refresh();
 			penBtn.setAttribute("style", this.tool === "pen" ? on : off);
@@ -477,6 +466,75 @@ export class InkPad {
 			lasBtn.setAttribute("style", this.tool === "lasso" ? on : off);
 		};
 		this.syncTools();
+	}
+
+	/** The "⋯" menu: what is not needed at every turn of the pen. It opens
+	 *  beside its button, toward the page, over a scrim that takes the next
+	 *  tap anywhere else: that tap only closes it, and writes nothing. */
+	private openMenu(anchor: HTMLElement) {
+		this.closeMenu();
+		const scrim = this.root.createDiv({ attr: { style: S.scrim } });
+		// Kept until the finger or pen lifts, so the rest of the touch does not
+		// land on the page with no start
+		scrim.addEventListener("pointerdown", (e: PointerEvent) => {
+			e.preventDefault();
+			scrim.setPointerCapture(e.pointerId);
+			this.menu?.remove();
+			this.menu = null;
+			this.eatClick();
+		});
+		for (const type of ["pointerup", "pointercancel"]) scrim.addEventListener(type, () => this.closeMenu());
+		scrim.addEventListener("wheel", (e) => { e.preventDefault(); this.closeMenu(); }, { passive: false });
+
+		const menu = this.root.createDiv({ attr: { style: S.menu, role: "menu" } });
+		const item = (icon: keyof typeof ICONS, label: string, cb: () => void, danger = false) => {
+			const b = menu.createEl("button", { attr: { role: "menuitem", style: S.menuItem + (danger ? S.menuDanger : "") } });
+			drawIcon(b, icon, 18);
+			b.createSpan({ text: label });
+			b.addEventListener("click", () => { this.closeMenu(); cb(); });
+		};
+		item("fit", t("tool.fit"), () => this.fitPage());
+		item("trash", t("tool.clear"), () => this.clearPage(), true);
+		this.menu = menu;
+		this.scrim = scrim;
+
+		// Beside a column, toward the page; above or below a row
+		const r = this.root.getBoundingClientRect(), a = anchor.getBoundingClientRect();
+		const w = menu.offsetWidth, h = menu.offsetHeight, gap = 8;
+		const ax = a.left - r.left, ay = a.top - r.top;
+		let x: number, y: number;
+		if (this.narrow) {
+			x = ax + a.width - w;
+			y = ay > r.height / 2 ? ay - gap - h : ay + a.height + gap;
+		} else {
+			x = ax > r.width / 2 ? ax - gap - w : ax + a.width + gap;
+			y = ay;
+		}
+		const clamp = (v: number, hi: number) => Math.max(gap, Math.min(v, hi - gap));
+		menu.setCssProps({ left: clamp(x, r.width - w) + "px", top: clamp(y, r.height - h) + "px" });
+	}
+
+	/** A finger's tap ends in a click, sent after the lift to whatever is under
+	 *  it by then. The scrim is gone by then, so the tap that closed the menu
+	 *  would also press the button under it: "⋯" opening the menu again, or
+	 *  another tool. That click is taken here, before anything sees it. A
+	 *  browser may send none, so the next touch down stops the watch, rather
+	 *  than letting it take a real click later. */
+	private eatClick() {
+		const root = this.root;
+		const eat = (e: Event) => { e.preventDefault(); e.stopPropagation(); stop(); };
+		const stop = () => {
+			root.removeEventListener("click", eat, true);
+			root.removeEventListener("pointerdown", stop, true);
+		};
+		root.addEventListener("click", eat, true);
+		root.addEventListener("pointerdown", stop, true);
+	}
+
+	private closeMenu() {
+		this.menu?.remove();
+		this.scrim?.remove();
+		this.menu = this.scrim = null;
 	}
 
 	/* ============ Left context bar ============ */
