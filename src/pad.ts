@@ -318,6 +318,9 @@ export class InkPad {
 		this.plugin.padReport = this.report();
 		const r = this.surface.getBoundingClientRect();
 		this.lastSize = { w: r.width, h: r.height };
+		// Each mount makes its own canvases. Emptied now, these do not keep two
+		// screens' worth of pixels for as long as the pad is parked.
+		for (const c of [this.base, this.live]) { c.width = 0; c.height = 0; }
 		this.mounted = false;
 		this.root.remove();
 		return this.strokes;

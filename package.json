@@ -6,7 +6,7 @@
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit && node esbuild.config.mjs production",
     "test": "esbuild src/ink.ts --bundle --format=cjs --outfile=.test-build/ink.cjs --log-level=error && node test/ink.test.js && esbuild src/transcribe.ts --bundle --format=cjs --platform=node --outfile=.test-build/transcribe.cjs --log-level=error --alias:obsidian=./test/obsidian-stub.js && node test/transcribe.test.js && esbuild src/main.ts --bundle --format=cjs --platform=node --outfile=.test-build/main.cjs --log-level=error --alias:obsidian=./test/obsidian-stub.js --define:__HW_VERSION__='\"test\"' --define:__HW_BUILD__='\"\"' && node test/convert.test.js && node test/i18n.test.js",
-    "test:pad": "esbuild test/pad-harness/entry.ts --bundle --format=iife --outfile=.test-build/pad-harness.js --log-level=error --alias:obsidian=./test/pad-harness/obsidian-dom-stub.js --define:__HW_VERSION__='\"harness\"' --define:__HW_BUILD__='\"harness\"' && node test/pad.e2e.mjs"
+    "test:pad": "esbuild test/pad-harness/entry.ts --bundle --format=iife --outfile=.test-build/pad-harness.js --log-level=error --alias:obsidian=./test/pad-harness/obsidian-dom-stub.js --define:__HW_VERSION__='\"harness\"' --define:__HW_BUILD__='\"harness\"' && node test/pad.e2e.mjs && node test/pad.memory.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
