@@ -22,7 +22,10 @@ const BORDER = "var(--background-modifier-border, rgba(127,127,127,.28))";
 export const CARD_EDGE = 12;
 export const CARD_GAP = 8;
 const CARD =
+	// touch-action and the callout: a card is held down to be dragged, and
+	// must not scroll or bring up the system's menu meanwhile
 	"position:absolute;z-index:20;margin:0;box-sizing:border-box;border-radius:16px;" +
+	"touch-action:none;-webkit-touch-callout:none;" +
 	`background:var(--background-primary, #fff);border:1px solid ${BORDER};` +
 	"box-shadow:0 4px 18px rgba(0,0,0,.14);";
 
@@ -50,15 +53,43 @@ export const S = {
 		CARD + "display:flex;flex-direction:column;flex-wrap:wrap;align-items:center;" +
 		"align-content:center;gap:6px;height:max-content;" +
 		`max-height:calc(100% - ${CARD_EDGE * 2}px);padding:6px 6px 8px;`,
-	// A row at the foot; a second row where the pad is narrower than the buttons
-	toolsNarrow:
+	// A row along the top or the foot; a second row where the pad is narrower
+	// than the buttons
+	toolsRow:
 		CARD + "display:flex;flex-direction:row;flex-wrap:wrap;align-items:center;" +
 		"justify-content:center;gap:4px 2px;width:max-content;" +
 		`max-width:calc(100% - ${CARD_EDGE * 2}px);padding:6px;`,
 	// The handle a card is held by: across the top of a column, down the
-	// start of a row
-	grip: "flex:0 0 auto;width:22px;height:4px;margin:2px 0 4px;border-radius:2px;background:var(--text-faint, rgba(127,127,127,.45));",
-	gripNarrow: "flex:0 0 auto;width:4px;height:22px;margin:0 4px 0 2px;border-radius:2px;background:var(--text-faint, rgba(127,127,127,.45));",
+	// start of a row. A mouse takes it straight away; anywhere else on the
+	// card is held a moment first. The bar is drawn small but the handle
+	// around it is not, so it is easy to take hold of.
+	grip:
+		"flex:0 0 auto;display:flex;align-items:center;justify-content:center;" +
+		"width:40px;height:14px;margin:-2px 0;",
+	gripRow:
+		"flex:0 0 auto;display:flex;align-items:center;justify-content:center;" +
+		"width:14px;height:36px;margin:0 -2px;",
+	gripBar: "width:22px;height:4px;border-radius:2px;pointer-events:none;background:var(--text-faint, rgba(127,127,127,.45));",
+	gripBarRow: "width:4px;height:22px;border-radius:2px;pointer-events:none;background:var(--text-faint, rgba(127,127,127,.45));",
+	// Added to the tool bar while it is being dragged: up off the page
+	lifted: "z-index:27;box-shadow:0 12px 36px rgba(0,0,0,.28);cursor:grabbing;",
+	// Over the page while the tool bar is dragged, with an outline at each
+	// place it can go, the nearest filled in
+	dragShade:
+		// Over the eraser dial too (25), which stays on the page
+		"position:absolute;inset:0;z-index:26;touch-action:none;" +
+		"background:rgba(127,127,127,.12);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);",
+	slot: "position:absolute;box-sizing:border-box;border-radius:16px;border:2px dashed var(--text-faint, rgba(127,127,127,.5));",
+	slotOn:
+		"position:absolute;box-sizing:border-box;border-radius:16px;" +
+		`border:2px solid ${ACCENT};background:rgba(91,110,214,.16);`,
+	// The one-time hint by the tool bar, in the theme's colours turned round
+	hint:
+		"position:absolute;z-index:30;padding:6px 10px;margin:0;box-sizing:border-box;white-space:nowrap;" +
+		"border-radius:8px;font-size:13px;line-height:1.35;font-weight:600;cursor:pointer;" +
+		"background:var(--text-normal, #222);color:var(--background-primary, #fff);" +
+		"box-shadow:0 4px 14px rgba(0,0,0,.25);",
+	hintArrow: "position:absolute;bottom:-5px;width:10px;height:10px;transform:rotate(45deg);background:var(--text-normal, #222);",
 
 	btn: BTN + `background:transparent;color:${MUTED};`,
 	btnOn: BTN + `background:${HOVER};color:${ACCENT};`,
@@ -92,7 +123,7 @@ export const S = {
 	ctxBar:
 		CARD + "display:flex;flex-direction:column;align-items:center;" +
 		"gap:7px;width:52px;padding:8px 0;overflow:hidden;",
-	ctxBarNarrow:
+	ctxBarRow:
 		CARD + "display:flex;flex-direction:row;align-items:center;" +
 		`gap:7px;height:52px;width:max-content;max-width:calc(100% - ${CARD_EDGE * 2}px);` +
 		"padding:0 8px;overflow-x:auto;overflow-y:hidden;",
@@ -120,7 +151,10 @@ export const S = {
 		BTN + "flex-direction:column;gap:3px;width:44px;height:auto;padding:7px 0 6px;margin-top:auto;" +
 		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);" +
 		"font-size:11px;line-height:1;font-weight:600;",
-	// On a phone the row has no room for the word; the accent still marks it
+	// In a row there is no room for the word; the accent still marks it
+	goRow:
+		BTN + "flex-direction:row;width:44px;height:40px;padding:0;" +
+		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);",
 	goNarrow:
 		BTN + "flex-direction:row;gap:5px;width:44px;height:36px;padding:0;" +
 		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);" +
@@ -147,6 +181,11 @@ export const S = {
 		"color:var(--text-normal, #222);",
 	// Added to an entry that throws something away
 	menuDanger: "color:var(--text-error, #e5484d);",
+	// The tool bar's place: a caption over a row of small screens
+	menuHead: `padding:6px 10px 2px;font-size:11px;line-height:1;color:${MUTED};`,
+	menuSides: "display:flex;gap:4px;padding:4px 6px 6px;",
+	sideBtn: BTN + `flex-direction:column;gap:2px;width:46px;height:46px;background:transparent;color:${MUTED};`,
+	sideBtnOn: BTN + `flex-direction:column;gap:2px;width:46px;height:46px;background:${HOVER};color:${ACCENT};`,
 	// Under the open menu and over everything else: a tap there only closes it
 	scrim: "position:absolute;inset:0;z-index:39;touch-action:none;",
 
@@ -219,6 +258,12 @@ export const ICONS = {
 		"M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z",
 		solid("M5 8a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1z"),
 	],
+	/* Where the tool bar goes, drawn the same way: a screen with a bar along
+	 * that edge */
+	left: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M4.5 7.5h3.5v9H4.5z")],
+	right: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M16 7.5h3.5v9H16z")],
+	top: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M4.5 7.5h15v3h-15z")],
+	bottom: ["M4 5h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z", solid("M4.5 13.5h15v3h-15z")],
 	/* Paper plane, after Lucide's "send" (ISC) */
 	send: [
 		"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",

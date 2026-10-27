@@ -15,6 +15,10 @@ const EDGE_PAD = 12;   // css px
 const MULTI_TAP_GAP = 200;   // ms
 const MULTI_TAP_UP = 300;    // ms
 const MULTI_TAP_SLOP = 10;   // css px
+/* Holding the tool bar this long takes it up to be dragged; a press that
+ * wanders further than LIFT_SLOP first was not a hold */
+const LIFT_MS = 300;
+const LIFT_SLOP = 10;   // css px
 const ZOOM_MAX = 8;
 
 /** The page is paper: white whatever the theme, with ink in near-black. It is
@@ -45,6 +49,8 @@ export interface PadExit { strokes: Stroke[]; convert: boolean }
 
 /** How the pad is shown: over the whole screen, or in a pane beside the note */
 export type PadMode = "full" | "split";
+/** The edge the tool bar floats by */
+export type ToolbarSide = "left" | "right" | "top" | "bottom";
 
 /** What the pad needs from whatever it is shown in */
 export interface PadHost {
@@ -209,9 +215,24 @@ export class InkPad {
 	private lastSize = { w: 0, h: 0 };
 	/** Whether the pad is on screen: a parked one can still be handed a page */
 	private mounted = false;
-	/** The strip along the edge the cards float over, kept off the page. Set
-	 *  where the cards are placed. */
-	private room = { right: 0, bottom: 0 };
+	/** The layout the bars were last built for, narrow or not and the tool
+	 *  bar's side; unknown until measured */
+	private layoutKey: string | null = null;
+	/** The strip along each edge the cards float over, kept off the page. The
+	 *  cards' own is worked out wherever they are placed; the page takes it
+	 *  up only when it is laid out (opening, resizing, fitting), so dragging
+	 *  the tool bar elsewhere leaves the page where it is. */
+	private cardRoom = { left: 0, top: 0, right: 0, bottom: 0 };
+	private room = { left: 0, top: 0, right: 0, bottom: 0 };
+	private grip: HTMLElement | null = null;
+	/** Ends a press on the tool bar that may yet become a drag */
+	private hold: (() => void) | null = null;
+	/** The tool bar being dragged: the press it began with, the shade over the
+	 *  page, the places it can go and the nearest */
+	private drag: { id: number; x: number; y: number; shade: HTMLElement;
+		slots: Map<ToolbarSide, { el: HTMLElement; x: number; y: number; w: number; h: number }>; near: ToolbarSide } | null = null;
+	/** The hint on moving the tool bar, until it has done its job */
+	private hint: HTMLElement | null = null;
 	/** The open "⋯" menu, and the scrim under it */
 	private menu: HTMLElement | null = null;
 	private scrim: HTMLElement | null = null;
@@ -239,6 +260,7 @@ export class InkPad {
 		// Unknown until measured, so the first applyLayout builds both bars
 		// again in the new place
 		this.narrow = null;
+		this.layoutKey = null;
 		// The zoom is relative to the space the page has: kept in the same
 		// space, replaced in another, where it would be wrong (a pad moved into
 		// a narrower pane would be zoomed in)
@@ -287,6 +309,7 @@ export class InkPad {
 		this.tools = root.createDiv({ attr: { style: S.tools } });
 		this.applyLayout();   // the first call always builds both bars
 		this.bindPointer();
+		this.bindToolbarDrag();
 
 		this.keys = [
 			host.scope.register(["Mod"], "z", () => { this.undo(); return false; }),
@@ -296,11 +319,18 @@ export class InkPad {
 			host.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; }),
 		];
 
-		this.ro = new ResizeObserver(() => { this.applyLayout(); this.resize(); });
+		// The tool bar alone changing size (taking a second column, say) only
+		// moves the cards; anything else lays the pad out again
+		this.ro = new ResizeObserver((entries) => {
+			if (entries.every((e) => e.target === this.tools)) { this.placeCards(); return; }
+			this.applyLayout();
+			this.resize();
+		});
 		this.ro.observe(root);         // decides the narrow layout
 		this.ro.observe(this.surface); // decides the canvas size
 		this.ro.observe(this.tools);   // wraps to two columns, moving the context bar
 		this.resize();
+		this.showHint();
 	}
 
 	/** Take the pad down and hand back what is on the page */
@@ -324,6 +354,9 @@ export class InkPad {
 		// screens' worth of pixels for as long as the pad is parked.
 		for (const c of [this.base, this.live]) { c.width = 0; c.height = 0; }
 		this.closeMenu();
+		this.hold?.();
+		this.drag = null;
+		this.hint = null;
 		this.mounted = false;
 		this.root.remove();
 		return this.strokes;
@@ -399,15 +432,27 @@ export class InkPad {
 
 	private applyLayout() {
 		const narrow = this.root.clientWidth > 0 && this.root.clientWidth < 420;
-		if (narrow === this.narrow) return;
 		this.narrow = narrow;
+		const key = `${narrow}:${this.side}`;
+		if (key === this.layoutKey) return;
+		this.layoutKey = key;
+		const across = this.across;
 		this.root.setAttribute("style", narrow ? S.rootNarrow : S.root);
-		this.tools.setAttribute("style", narrow ? S.toolsNarrow : S.tools);
-		if (this.ctxBar.isConnected) this.ctxBar.setAttribute("style", narrow ? S.ctxBarNarrow : S.ctxBar);
+		this.tools.setAttribute("style", across ? S.toolsRow : S.tools);
+		if (this.ctxBar.isConnected) this.ctxBar.setAttribute("style", across ? S.ctxBarRow : S.ctxBar);
 		this.buildToolbar();
 		this.buildContextBar();
 		this.placeCards();
 	}
+
+	/** The edge the tool bar floats by. A narrow pad has room for a row only:
+	 *  top stays top, and the sides go to the foot. */
+	private get side(): ToolbarSide {
+		const s = this.plugin.settings.toolbarSide;
+		return this.narrow ? (s === "top" ? "top" : "bottom") : s;
+	}
+	/** Whether the bars run across the pad, as rows, rather than down it */
+	private get across() { return this.side === "top" || this.side === "bottom"; }
 
 	/* ============ Tool bar ============ */
 
@@ -434,9 +479,11 @@ export class InkPad {
 			b.addEventListener("click", cb);
 			return b;
 		};
-		const sep = () => bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } });
+		const across = this.across;
+		const sep = () => bar.createDiv({ attr: { style: across ? S.sepNarrow : S.sep } });
 
-		bar.createDiv({ attr: { style: this.narrow ? S.gripNarrow : S.grip } });
+		this.grip = bar.createDiv({ attr: { style: across ? S.gripRow : S.grip } });
+		this.grip.createDiv({ attr: { style: across ? S.gripBarRow : S.gripBar } });
 		btn("close", t("tool.close"), () => this.host.close());
 		const swap = this.host.swap;
 		if (swap) {
@@ -460,10 +507,10 @@ export class InkPad {
 		more.createDiv({ text: t("tool.moreLabel"), attr: { style: S.btnCaption } });
 
 		const go = bar.createEl("button", {
-			attr: { "aria-label": t("tool.convertHint"), title: t("tool.convertHint"), style: this.narrow ? S.goNarrow : S.go },
+			attr: { "aria-label": t("tool.convertHint"), title: t("tool.convertHint"), style: !across ? S.go : this.narrow ? S.goNarrow : S.goRow },
 		});
 		drawIcon(go, "send", 18);
-		if (!this.narrow) go.createSpan({ text: t("tool.convert") });
+		if (!across) go.createSpan({ text: t("tool.convert") });
 		go.addEventListener("click", () => this.tryConvert());
 
 		this.syncTools = () => {
@@ -500,6 +547,18 @@ export class InkPad {
 			b.createSpan({ text: label });
 			b.addEventListener("click", () => { this.closeMenu(); cb(); });
 		};
+		menu.createDiv({ text: t("menu.position"), attr: { style: S.menuHead } });
+		const places = menu.createDiv({ attr: { style: S.menuSides } });
+		const sides: ToolbarSide[] = this.narrow ? ["top", "bottom"] : ["left", "right", "top", "bottom"];
+		for (const side of sides) {
+			const here = side === this.side;
+			const b = places.createEl("button", {
+				attr: { role: "menuitemradio", "aria-checked": String(here), "aria-label": t(`side.${side}`), style: here ? S.sideBtnOn : S.sideBtn },
+			});
+			drawIcon(b, side, 20);
+			b.createDiv({ text: t(`side.${side}`), attr: { style: S.btnCaption } });
+			b.addEventListener("click", () => { this.closeMenu(); this.moveToolbar(side); });
+		}
 		item("fit", t("tool.fit"), () => this.fitPage());
 		item("trash", t("tool.clear"), () => this.clearPage(), true);
 		this.menu = menu;
@@ -510,7 +569,7 @@ export class InkPad {
 		const w = menu.offsetWidth, h = menu.offsetHeight, gap = 8;
 		const ax = a.left - r.left, ay = a.top - r.top;
 		let x: number, y: number;
-		if (this.narrow) {
+		if (this.across) {
 			x = ax + a.width - w;
 			y = ay > r.height / 2 ? ay - gap - h : ay + a.height + gap;
 		} else {
@@ -547,37 +606,206 @@ export class InkPad {
 	/* ============ Left context bar ============ */
 
 	/** Keep the dial on the canvas. The surface resizes under it on rotation and
-	 *  in split view, and a dial parked off the edge could never be got back. */
+	 *  in split view, and a dial parked off the edge could never be got back.
+	 *  Until it is moved it sits at the top left of the page's part, so a tool
+	 *  bar along the top or the left does not start out under it. */
 	private placeDial() {
 		if (!this.dial) return;
 		const r = this.surface.getBoundingClientRect();
 		if (!r.width || !r.height) return;
 		const s = this.plugin.settings;
 		const first = s.dialX < 0 || s.dialY < 0;
-		const at = this.dial.place(first ? 14 : s.dialX, first ? 14 : s.dialY,
+		const at = this.dial.place(first ? this.cardRoom.left + 14 : s.dialX, first ? this.cardRoom.top + 14 : s.dialY,
 			{ w: r.width, h: r.height });
 		if (!first) { s.dialX = at.x; s.dialY = at.y; }
 	}
 
-	/** Float the cards over the canvas: the tool bar a column at the middle of
-	 *  the right edge with the width bar beside it, or on a narrow pad a row at
-	 *  the foot with the widths above it. Their sizes follow their contents,
-	 *  so they are measured each time. */
+	/** Float the cards over the canvas by the tool bar's edge: by a side, the
+	 *  tool bar a column at the middle with the widths beside it, toward the
+	 *  page; by the top or the foot, a row at the middle with the widths
+	 *  beside it likewise. Their sizes follow their contents, so they are
+	 *  measured each time. */
 	private placeCards() {
 		const W = this.root.clientWidth, H = this.root.clientHeight;
-		const t = this.tools, c = this.ctxBar;
+		const t = this.tools, c = this.ctxBar, side = this.side;
 		const tw = t.offsetWidth, th = t.offsetHeight;
-		if (this.narrow) {
-			const top = H - CARD_EDGE - th;
-			t.setCssProps({ left: (W - tw) / 2 + "px", top: top + "px" });
-			if (c.isConnected) c.setCssProps({ left: (W - c.offsetWidth) / 2 + "px", top: top - CARD_GAP - c.offsetHeight + "px" });
-			this.room = { right: 0, bottom: CARD_EDGE + th + CARD_GAP + CTX_H };
+		const cw = c.isConnected ? c.offsetWidth : 0, ch = c.isConnected ? c.offsetHeight : 0;
+		const room = { left: 0, top: 0, right: 0, bottom: 0 };
+		let tx: number, ty: number, cx: number, cy: number;
+		if (side === "left" || side === "right") {
+			ty = cy = Math.max(CARD_EDGE, (H - th) / 2);
+			tx = side === "right" ? W - CARD_EDGE - tw : CARD_EDGE;
+			cx = side === "right" ? tx - CARD_GAP - cw : tx + tw + CARD_GAP;
+			room[side] = CARD_EDGE + tw + CARD_GAP + CTX_W;
 		} else {
-			const left = W - CARD_EDGE - tw, top = Math.max(CARD_EDGE, (H - th) / 2);
-			t.setCssProps({ left: left + "px", top: top + "px" });
-			if (c.isConnected) c.setCssProps({ left: left - CARD_GAP - c.offsetWidth + "px", top: top + "px" });
-			this.room = { right: CARD_EDGE + tw + CARD_GAP + CTX_W, bottom: 0 };
+			tx = (W - tw) / 2;
+			cx = (W - cw) / 2;
+			ty = side === "bottom" ? H - CARD_EDGE - th : CARD_EDGE;
+			cy = side === "bottom" ? ty - CARD_GAP - ch : ty + th + CARD_GAP;
+			room[side] = CARD_EDGE + th + CARD_GAP + CTX_H;
 		}
+		t.setCssProps({ left: tx + "px", top: ty + "px" });
+		if (c.isConnected) c.setCssProps({ left: cx + "px", top: cy + "px" });
+		this.cardRoom = room;
+		this.placeHint();
+	}
+
+	/* ============ Moving the tool bar ============ */
+
+	/** Holding the tool bar takes it up, to be dragged to another edge: a
+	 *  moment's hold anywhere on it, buttons included, or straight away by its
+	 *  grip. A quick tap on a button is still a tap. The press is followed on
+	 *  the document: until it is a drag nothing is captured, which would take
+	 *  the click away from the button. */
+	private bindToolbarDrag() {
+		this.tools.addEventListener("pointerdown", (e: PointerEvent) => {
+			if (this.hold || this.drag || e.button !== 0) return;
+			const doc = this.root.ownerDocument;
+			const move = (ev: PointerEvent) => {
+				if (ev.pointerId !== e.pointerId) return;
+				if (this.drag) this.dragToolbar(ev);
+				else if (Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) > LIFT_SLOP) stop();
+			};
+			const end = (ev: PointerEvent) => {
+				if (ev.pointerId !== e.pointerId) return;
+				if (this.drag) this.dropToolbar(ev.type === "pointerup");
+				stop();
+			};
+			const stop = () => {
+				window.clearTimeout(timer);
+				doc.removeEventListener("pointermove", move);
+				doc.removeEventListener("pointerup", end);
+				doc.removeEventListener("pointercancel", end);
+				this.hold = null;
+			};
+			const timer = window.setTimeout(() => this.liftToolbar(e), this.grip?.contains(e.target as Node) ? 0 : LIFT_MS);
+			doc.addEventListener("pointermove", move);
+			doc.addEventListener("pointerup", end);
+			doc.addEventListener("pointercancel", end);
+			this.hold = stop;
+		});
+	}
+
+	/** Take the tool bar up: the page shaded, an outline at each place it can
+	 *  go, sized as it would be there */
+	private liftToolbar(e: PointerEvent) {
+		const t = this.tools;
+		try { t.setPointerCapture(e.pointerId); } catch { /* lifted after all fingers left; the drag ends at once */ }
+		this.closeMenu();
+		this.dismissHint();
+		// The press began on a button, and ends in a click on it: not this time
+		this.eatClick();
+		this.ctxBar.remove();
+		const W = this.root.clientWidth, H = this.root.clientHeight;
+		const now = { w: t.offsetWidth, h: t.offsetHeight };
+		const col = this.across ? { w: now.h, h: now.w } : now;
+		const row = { w: Math.min(col.h, W - CARD_EDGE * 2), h: col.w };
+		col.h = Math.min(col.h, H - CARD_EDGE * 2);
+		const at: Record<ToolbarSide, { x: number; y: number; w: number; h: number }> = {
+			left: { x: CARD_EDGE, y: (H - col.h) / 2, ...col },
+			right: { x: W - CARD_EDGE - col.w, y: (H - col.h) / 2, ...col },
+			top: { x: (W - row.w) / 2, y: CARD_EDGE, ...row },
+			bottom: { x: (W - row.w) / 2, y: H - CARD_EDGE - row.h, ...row },
+		};
+		const shade = this.root.createDiv({ attr: { style: S.dragShade } });
+		const slots = new Map<ToolbarSide, { el: HTMLElement; x: number; y: number; w: number; h: number }>();
+		const sides: ToolbarSide[] = this.narrow ? ["top", "bottom"] : ["left", "right", "top", "bottom"];
+		for (const side of sides) slots.set(side, { el: shade.createDiv(), ...at[side] });
+		t.setAttribute("style", (t.getAttribute("style") ?? "") + S.lifted);
+		this.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, shade, slots, near: this.side };
+		this.dragToolbar(e);
+	}
+
+	/** The tool bar follows the press; the place nearest it lights up */
+	private dragToolbar(e: PointerEvent) {
+		const d = this.drag;
+		if (!d) return;
+		this.tools.setCssProps({ transform: `translate(${e.clientX - d.x}px, ${e.clientY - d.y}px) scale(1.04)` });
+		const r = this.root.getBoundingClientRect();
+		const px = e.clientX - r.left, py = e.clientY - r.top;
+		let best = d.near, bestD = Infinity;
+		for (const [side, s] of d.slots) {
+			const dist = Math.hypot(Math.max(s.x - px, 0, px - s.x - s.w), Math.max(s.y - py, 0, py - s.y - s.h));
+			if (dist < bestD) { bestD = dist; best = side; }
+		}
+		d.near = best;
+		for (const [side, s] of d.slots)
+			s.el.setAttribute("style", (side === best ? S.slotOn : S.slot) + `left:${s.x}px;top:${s.y}px;width:${s.w}px;height:${s.h}px;`);
+	}
+
+	/** Let go: to the place lit up, or, if the press was cancelled, back */
+	private dropToolbar(commit: boolean) {
+		const d = this.drag;
+		if (!d) return;
+		this.drag = null;
+		d.shade.remove();
+		if (commit) this.moveToolbar(d.near);
+		else { this.layoutKey = null; this.applyLayout(); }
+	}
+
+	/** Put the tool bar by another edge, and keep it there, here and in any pad
+	 *  opened later. The page stays where it is: it makes way for the cards
+	 *  the next time it is laid out. */
+	private moveToolbar(side: ToolbarSide) {
+		const s = this.plugin.settings;
+		s.toolbarSide = side;
+		s.toolbarHintSeen = true;
+		void this.plugin.saveSettings();
+		this.dismissHint();
+		this.layoutKey = null;
+		this.applyLayout();
+		// A dial never moved starts clear of the cards; it follows them
+		this.placeDial();
+	}
+
+	/** Tell of the drag once: by the tool bar until it has been moved, or
+	 *  until the hint is tapped */
+	private showHint() {
+		if (this.plugin.settings.toolbarHintSeen || this.hint) return;
+		const h = this.hint = this.root.createDiv({ attr: { style: S.hint } });
+		h.createSpan({ text: t("hint.drag") });
+		h.createDiv({ attr: { style: S.hintArrow } });
+		h.addEventListener("pointerdown", (e: PointerEvent) => {
+			e.preventDefault();
+			e.stopPropagation();
+			const s = this.plugin.settings;
+			s.toolbarHintSeen = true;
+			void this.plugin.saveSettings();
+			this.dismissHint();
+		});
+		this.placeHint();
+	}
+
+	private dismissHint() {
+		this.hint?.remove();
+		this.hint = null;
+	}
+
+	/** Over a column, its arrow at the grip, where there is room; otherwise
+	 *  beside the cards, toward the page */
+	private placeHint() {
+		const h = this.hint;
+		if (!h) return;
+		const W = this.root.clientWidth, H = this.root.clientHeight, gap = 10;
+		const t = this.tools, c = this.ctxBar.isConnected ? this.ctxBar : t;
+		const tl = t.offsetLeft, tt = t.offsetTop, tw = t.offsetWidth;
+		const ul = Math.min(tl, c.offsetLeft), ut = Math.min(tt, c.offsetTop);
+		const ur = Math.max(tl + tw, c.offsetLeft + c.offsetWidth), ub = Math.max(tt + t.offsetHeight, c.offsetTop + c.offsetHeight);
+		const hw = h.offsetWidth, hh = h.offsetHeight, side = this.side;
+		let x: number, y: number, arrow: number | null = null;
+		if (!this.across && tt - gap - hh >= CARD_EDGE) {
+			y = tt - gap - hh;
+			x = side === "right" ? tl + tw - hw : tl;
+			arrow = tl + tw / 2 - 5;
+		} else if (side === "right") { x = ul - gap - hw; y = tt; }
+		else if (side === "left") { x = ur + gap; y = tt; }
+		else if (side === "top") { x = tl; y = ub + gap; }
+		else { x = tl; y = ut - gap - hh; }
+		x = Math.max(8, Math.min(x, W - hw - 8));
+		y = Math.max(8, Math.min(y, H - hh - 8));
+		h.setCssProps({ left: x + "px", top: y + "px" });
+		const a = h.lastElementChild as HTMLElement;
+		a.setAttribute("style", S.hintArrow + (arrow === null ? "display:none;" : `left:${arrow - x}px;`));
 	}
 
 	private buildContextBar() {
@@ -592,11 +820,11 @@ export class InkPad {
 		if (this.tool !== "pen" && this.tool !== "ai") { bar.remove(); return; }
 		if (!bar.isConnected) {
 			// Reapply the style: applyLayout skips the bar while it is detached
-			bar.setAttribute("style", this.narrow ? S.ctxBarNarrow : S.ctxBar);
+			bar.setAttribute("style", this.across ? S.ctxBarRow : S.ctxBar);
 			this.root.insertBefore(bar, this.tools);
 		}
 		this.placeCards();
-		const vert = !this.narrow;
+		const vert = !this.across;
 
 		const dots: HTMLElement[] = [];
 		const btns = this.sizes.map((sz, i) => {
@@ -712,8 +940,8 @@ export class InkPad {
 	 *  strip the cards float over, so that it opens clear of them. The width
 	 *  bar's room is kept even while it is hidden, so the page does not jump
 	 *  sideways each time the pen is picked up or put down. */
-	private get usableW() { return Math.max(this.surface.clientWidth - this.room.right, 80); }
-	private get usableH() { return Math.max(this.surface.clientHeight - this.room.bottom, 80); }
+	private get usableW() { return Math.max(this.surface.clientWidth - this.room.left - this.room.right, 80); }
+	private get usableH() { return Math.max(this.surface.clientHeight - this.room.top - this.room.bottom, 80); }
 
 	/** The zoom at which the page fills the width. Held upright that is zoom 1
 	 *  anyway; in landscape the whole page is small, and the pad opens here. */
@@ -746,6 +974,7 @@ export class InkPad {
 		}
 		// The page is laid out clear of the cards: their room first
 		this.placeCards();
+		this.room = this.cardRoom;
 		if (!this.placed) {
 			// Open at the top of the page, filling the width. A pad mounted again
 			// gets its view back in the same space, and in another fills the new
@@ -796,8 +1025,11 @@ export class InkPad {
 		const m = EDGE_PAD / this.scale;
 		const fit = (pan: number, view: number, page: number) =>
 			view >= page + 2 * m ? -(view - page) / 2 : Math.min(Math.max(pan, -m), page - view + m);
-		this.panX = fit(this.panX, this.usableW / this.scale, PAGE_W);
-		this.panY = fit(this.panY, this.usableH / this.scale, PAGE_H);
+		// Worked out from the usable area's corner, which room on the left or
+		// at the top moves off the canvas's own
+		const ox = this.room.left / this.scale, oy = this.room.top / this.scale;
+		this.panX = fit(this.panX + ox, this.usableW / this.scale, PAGE_W) - ox;
+		this.panY = fit(this.panY + oy, this.usableH / this.scale, PAGE_H) - oy;
 	}
 
 	private syncViewport() {
@@ -1302,6 +1534,9 @@ export class InkPad {
 
 	/** Whole page, or page width when the whole page is already showing */
 	private fitPage() {
+		// Clear of the cards where they are now, wherever the page was laid
+		// out for before
+		this.room = this.cardRoom;
 		const w = this.widthZoom();
 		this.zoom = Math.abs(this.zoom - 1) < 1e-3 && w > 1 + 1e-3 ? w : 1;
 		this.syncViewport();
