@@ -3,7 +3,7 @@ import {
 	InkOpts, NOTE_INK, PAGE_H, PAGE_W, SPLINE_FROM, Stroke,
 	drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
 } from "./ink";
-import { CTX_H, CTX_W, ICONS, MODAL, S, drawIcon } from "./styles";
+import { CARD_EDGE, CARD_GAP, CTX_H, CTX_W, ICONS, MODAL, S, drawIcon } from "./styles";
 import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
 import { buildEraserDial, Dial } from "./dial";
@@ -209,6 +209,9 @@ export class InkPad {
 	private lastSize = { w: 0, h: 0 };
 	/** Whether the pad is on screen: a parked one can still be handed a page */
 	private mounted = false;
+	/** The strip along the edge the cards float over, kept off the page. Set
+	 *  where the cards are placed. */
+	private room = { right: 0, bottom: 0 };
 	/** The open "⋯" menu, and the scrim under it */
 	private menu: HTMLElement | null = null;
 	private scrim: HTMLElement | null = null;
@@ -403,6 +406,7 @@ export class InkPad {
 		if (this.ctxBar.isConnected) this.ctxBar.setAttribute("style", narrow ? S.ctxBarNarrow : S.ctxBar);
 		this.buildToolbar();
 		this.buildContextBar();
+		this.placeCards();
 	}
 
 	/* ============ Tool bar ============ */
@@ -432,6 +436,7 @@ export class InkPad {
 		};
 		const sep = () => bar.createDiv({ attr: { style: this.narrow ? S.sepNarrow : S.sep } });
 
+		bar.createDiv({ attr: { style: this.narrow ? S.gripNarrow : S.grip } });
 		btn("close", t("tool.close"), () => this.host.close());
 		const swap = this.host.swap;
 		if (swap) {
@@ -451,6 +456,8 @@ export class InkPad {
 		btn("undo", t("tool.undo"), () => this.undo());
 		btn("redo", t("tool.redo"), () => this.redo());
 		const more: HTMLElement = btn("more", t("tool.more"), () => this.openMenu(more));
+		more.setAttribute("style", off + S.btnStacked);
+		more.createDiv({ text: t("tool.moreLabel"), attr: { style: S.btnCaption } });
 
 		const go = bar.createEl("button", {
 			attr: { "aria-label": t("tool.convertHint"), title: t("tool.convertHint"), style: this.narrow ? S.goNarrow : S.go },
@@ -552,13 +559,25 @@ export class InkPad {
 		if (!first) { s.dialX = at.x; s.dialY = at.y; }
 	}
 
-	/** Park the context column against the tool bar. The tool bar's size is
-	 *  content-driven -- it wraps into a second column when the buttons do not fit
-	 *  -- so a hardcoded offset would overlap it or leave a gap. */
-	private placeCtxBar() {
-		if (!this.ctxBar.isConnected) return;
-		if (this.narrow) this.ctxBar.setCssProps({ bottom: this.tools.offsetHeight + "px", right: "" });
-		else this.ctxBar.setCssProps({ right: this.tools.offsetWidth + "px", bottom: "" });
+	/** Float the cards over the canvas: the tool bar a column at the middle of
+	 *  the right edge with the width bar beside it, or on a narrow pad a row at
+	 *  the foot with the widths above it. Their sizes follow their contents,
+	 *  so they are measured each time. */
+	private placeCards() {
+		const W = this.root.clientWidth, H = this.root.clientHeight;
+		const t = this.tools, c = this.ctxBar;
+		const tw = t.offsetWidth, th = t.offsetHeight;
+		if (this.narrow) {
+			const top = H - CARD_EDGE - th;
+			t.setCssProps({ left: (W - tw) / 2 + "px", top: top + "px" });
+			if (c.isConnected) c.setCssProps({ left: (W - c.offsetWidth) / 2 + "px", top: top - CARD_GAP - c.offsetHeight + "px" });
+			this.room = { right: 0, bottom: CARD_EDGE + th + CARD_GAP + CTX_H };
+		} else {
+			const left = W - CARD_EDGE - tw, top = Math.max(CARD_EDGE, (H - th) / 2);
+			t.setCssProps({ left: left + "px", top: top + "px" });
+			if (c.isConnected) c.setCssProps({ left: left - CARD_GAP - c.offsetWidth + "px", top: top + "px" });
+			this.room = { right: CARD_EDGE + tw + CARD_GAP + CTX_W, bottom: 0 };
+		}
 	}
 
 	private buildContextBar() {
@@ -576,7 +595,7 @@ export class InkPad {
 			bar.setAttribute("style", this.narrow ? S.ctxBarNarrow : S.ctxBar);
 			this.root.insertBefore(bar, this.tools);
 		}
-		this.placeCtxBar();
+		this.placeCards();
 		const vert = !this.narrow;
 
 		const dots: HTMLElement[] = [];
@@ -689,12 +708,12 @@ export class InkPad {
 
 	/* ============ Size and coordinates ============ */
 
-	/** The part of the canvas the page may use, in css px. The context bar
-	 *  floats over the canvas, and its room is kept even while it is hidden, so
-	 *  the page does not jump sideways each time the pen is picked up or put
-	 *  down. */
-	private get usableW() { return Math.max(this.surface.clientWidth - (this.narrow ? 0 : CTX_W), 80); }
-	private get usableH() { return Math.max(this.surface.clientHeight - (this.narrow ? CTX_H : 0), 80); }
+	/** The part of the canvas the page may use, in css px: all of it but the
+	 *  strip the cards float over, so that it opens clear of them. The width
+	 *  bar's room is kept even while it is hidden, so the page does not jump
+	 *  sideways each time the pen is picked up or put down. */
+	private get usableW() { return Math.max(this.surface.clientWidth - this.room.right, 80); }
+	private get usableH() { return Math.max(this.surface.clientHeight - this.room.bottom, 80); }
 
 	/** The zoom at which the page fills the width. Held upright that is zoom 1
 	 *  anyway; in landscape the whole page is small, and the pad opens here. */
@@ -725,6 +744,8 @@ export class InkPad {
 			cv.style.width = r.width + "px";
 			cv.style.height = r.height + "px";
 		}
+		// The page is laid out clear of the cards: their room first
+		this.placeCards();
 		if (!this.placed) {
 			// Open at the top of the page, filling the width. A pad mounted again
 			// gets its view back in the same space, and in another fills the new
@@ -743,7 +764,6 @@ export class InkPad {
 			}
 		}
 		this.clampPan();
-		this.placeCtxBar();
 		this.placeDial();
 		this.redrawAll();
 		this.rebuildOverlay();

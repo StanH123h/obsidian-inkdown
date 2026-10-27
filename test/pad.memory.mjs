@@ -116,7 +116,9 @@ async function canvasMemory() {
 	if (!dump.success) throw new Error("memory dump failed");
 	await browser.send("Tracing.end");
 	let done;
-	for (let i = 0; i < 100 && !(done = browser.events.find((e) => e.method === "Tracing.tracingComplete")); i++) await wait(50);
+	// Usually well under a second; seconds when the machine is busy, as just
+	// after the other pad tests' browser has closed
+	for (let i = 0; i < 300 && !(done = browser.events.find((e) => e.method === "Tracing.tracingComplete")); i++) await wait(50);
 	if (!done) throw new Error("tracing did not finish");
 	let text = "";
 	for (;;) {

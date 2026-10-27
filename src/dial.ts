@@ -100,10 +100,12 @@ export interface Dial {
 }
 
 export function buildEraserDial(parent: HTMLElement, host: DialHost): Dial {
+	// Over the tool cards, not under: it can be left on one, and it is dragged
+	// by its middle, which a card on top would cover
 	const wrap = parent.createDiv({
 		attr: {
 			style:
-				"position:absolute;left:14px;top:14px;z-index:5;" +
+				"position:absolute;left:14px;top:14px;z-index:25;" +
 				`width:${BOX}px;height:${BOX}px;touch-action:none;` +
 				"-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;",
 		},

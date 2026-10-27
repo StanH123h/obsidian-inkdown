@@ -132,6 +132,19 @@ const menu = async (label) => {
 const toolbarFits = (box = "document.documentElement") => js(`(() => { const t = __pad.tools, r = (${box}).getBoundingClientRect();
 	const out = [...t.querySelectorAll('button')].filter(b => { const q = b.getBoundingClientRect(); return q.left < r.left - 0.5 || q.top < r.top - 0.5 || q.right > r.right + 0.5 || q.bottom > r.bottom + 0.5; });
 	return { n: t.querySelectorAll('button').length, out: out.map(b => b.getAttribute('aria-label')), scrolls: t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1 }; })()`);
+/** Where the cards, the canvas and the dial are, and the page at its zoom */
+const layout = () => js(`(() => { const p = __pad, R = (e) => { if (!e.isConnected) return null; const r = e.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height }; };
+	const c = p.live.getBoundingClientRect(), sc = p.scale;
+	return { root: R(p.root), tools: R(p.tools), widths: R(p.ctxBar), canvas: R(p.live), dial: R(p.dial.el), zoom: p.zoom, panX: p.panX, panY: p.panY,
+		page: { l: c.left - p.panX * sc, t: c.top - p.panY * sc, r: c.left + (1000 - p.panX) * sc, b: c.top + (1414 - p.panY) * sc } }; })()`);
+const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
+const drag = async (from, to, steps = 12) => {
+	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: from[0], y: from[1], button: "left", buttons: 1, clickCount: 1 });
+	for (let i = 1; i <= steps; i++)
+		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: from[0] + ((to[0] - from[0]) * i) / steps, y: from[1] + ((to[1] - from[1]) * i) / steps, button: "left", buttons: 1 });
+	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: to[0], y: to[1], button: "left", buttons: 0, clickCount: 1 });
+	await frame();
+};
 async function viewport(width, height) {
 	await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile: true });
 	await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
@@ -522,6 +535,49 @@ try {
 	ok(u.strokes === 2, "redo works across closing and opening again");
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- the cards: floating over the canvas, clear of the page ---- */
+	for (const [w, hgt, name] of [[820, 1180, "upright"], [1180, 820, "landscape"]]) {
+		await viewport(w, hgt);
+		await js("openPad([])");
+		await new Promise((r) => setTimeout(r, 300));
+		const L = await layout();
+		ok(L.canvas.w === w && L.canvas.h === hgt, `${name}: the canvas fills the pad: ${L.canvas.w}×${L.canvas.h}`);
+		ok(near(L.tools.r, w - 12) && near(L.tools.t + L.tools.h / 2, hgt / 2), `${name}: the tool bar floats 12px in from the right edge, at its middle: ${JSON.stringify(L.tools)}`);
+		ok(near(L.widths.r, L.tools.l - 8) && near(L.widths.t, L.tools.t), `${name}: the widths sit beside it, tops level: ${JSON.stringify(L.widths)}`);
+		ok(L.page.r <= L.widths.l - 8, `${name}: the page opens clear of the cards: page right ${L.page.r.toFixed(0)}, widths at ${L.widths.l.toFixed(0)}`);
+		await button("Lasso: circle ink to move it");
+		const L2 = await layout();
+		ok(L2.widths === null && L2.zoom === L.zoom && L2.panX === L.panX && L2.panY === L.panY, `${name}: the widths go with the pen, and the page stays put`);
+		await button("Pen");
+		await button("Close (your writing is kept for next time)");
+	}
+	// The dial can be left on a card, as anywhere else: it stays where it is
+	// put, over the card, so its middle can still be taken to drag it off
+	await viewport(820, 1180);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	let L = await layout();
+	const onBar = [L.tools.l + 10, L.tools.t + L.tools.h / 2];
+	await drag([L.dial.l + L.dial.w / 2, L.dial.t + L.dial.h / 2], onBar);
+	L = await layout();
+	const onTop = await js(`__pad.dial.el.contains(document.elementFromPoint(${onBar[0]}, ${onBar[1]}))`);
+	ok(near(L.dial.l + L.dial.w / 2, onBar[0], 3) && near(L.dial.t + L.dial.h / 2, onBar[1], 3) && onTop, `the dial let go on the tool bar stays there, on top of it: centre ${(L.dial.l + L.dial.w / 2).toFixed(0)},${(L.dial.t + L.dial.h / 2).toFixed(0)}, on top ${onTop}`);
+	await drag(onBar, [300, 300]);
+	L = await layout();
+	ok(near(L.dial.l + L.dial.w / 2, 300, 3) && near(L.dial.t + L.dial.h / 2, 300, 3), "and is dragged off it again by its middle");
+	await js("settings.dialX = -1; settings.dialY = -1; __pad.placeDial()");
+	await button("Close (your writing is kept for next time)");
+	// A short window: the tool bar takes a second column rather than losing
+	// buttons off the bottom
+	await viewport(1000, 420);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	const short = await toolbarFits();
+	ok(!short.out.length && !short.scrolls, `a short window: every tool bar button on screen, in two columns: ${JSON.stringify(short)}`);
+	await shot("short");
+	await button("Close (your writing is kept for next time)");
+	await viewport(820, 1180);
+
 	/* ---- in a pane, and moving between hosts ---- */
 	await viewport(1180, 820);   // landscape, the way split view is used
 	await js("openSwappable(590, 820)");
@@ -541,7 +597,7 @@ try {
 		split: !!document.querySelector('button[aria-label="Open beside the note"]') }; })()`);
 	let h = await host();
 	ok(!h.modal && h.strokes === 2 && h.undo === 2, `moving into the pane keeps the page and its undo history: ${JSON.stringify(h)}`);
-	ok(h.c[0] > 300 && h.c[0] < 590 && h.c[1] > 700, `the canvas fits the pane: ${h.c}`);
+	ok(h.c[0] === 590 && h.c[1] === 820, `the canvas fills the pane, the cards floating over it: ${h.c}`);
 	ok(h.widthFit, "the page fills the pane's width, rather than keeping a zoom made for the whole screen");
 	ok(h.full && !h.split && h.modalKeys === 0 && h.paneKeys === keys && keys > 0, `the pane offers full screen, and the shortcuts moved with the pad: ${h.modalKeys} left behind, ${h.paneKeys} of ${keys} in the pane`);
 	await shot("pane");
@@ -552,6 +608,10 @@ try {
 	await new Promise((r) => setTimeout(r, 300));
 	h = await host();
 	ok(h.narrow === true && h.c[0] <= 360 && h.c[0] > 300, `a narrow pane gets the narrow layout, and the canvas follows: ${JSON.stringify(h)}`);
+	const tf = await toolbarFits("__pad.root");
+	const rows = await js("__pad.tools.offsetHeight");
+	ok(!tf.out.length && !tf.scrolls && rows > 60, `every tool bar button is in the narrow pane, on a second row: ${JSON.stringify(tf)}, ${rows}px tall`);
+	await shot("pane-narrow");
 	await js("resizePane(590, 820)");
 	await new Promise((r) => setTimeout(r, 300));
 	await button("Turn this into Markdown at the cursor");
@@ -619,6 +679,12 @@ try {
 		ok(g.go[0] >= 0 && g.go[1] >= 0 && g.go[0] + g.go[2] <= w + 0.5 && g.go[1] + g.go[3] <= h + 0.5, `${name}: convert button on screen at ${g.go.map((v) => v.toFixed(0))}`);
 		const tf = await toolbarFits();
 		ok(!tf.out.length && !tf.scrolls, `${name}: every tool bar button on screen, redo included: ${JSON.stringify(tf)}`);
+		if (name === "phone") {
+			const P = await layout();
+			ok(near(P.tools.b, h - 12) && near(P.tools.l + P.tools.w / 2, w / 2) && P.tools.h < 60, `phone: one row floating 12px above the foot, centred: ${JSON.stringify(P.tools)}`);
+			ok(near(P.widths.b, P.tools.t - 8) && near(P.widths.l + P.widths.w / 2, w / 2), `phone: the widths just above it: ${JSON.stringify(P.widths)}`);
+			ok(P.page.b <= P.widths.t - 8, `phone: the page opens clear of them: page foot ${P.page.b.toFixed(0)}, widths from ${P.widths.t.toFixed(0)}`);
+		}
 		await button("More");
 		const mi = await js(`(() => { const r = document.querySelector('[role=menu]').getBoundingClientRect(), q = [...__pad.tools.querySelectorAll('button')].find(b => b.getAttribute('aria-label') === 'More').getBoundingClientRect();
 			const clear = r.right <= q.left || r.left >= q.right || r.bottom <= q.top || r.top >= q.bottom; return [r.left, r.top, r.right, r.bottom, clear]; })()`);
