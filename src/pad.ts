@@ -13,6 +13,12 @@ declare const __HW_VERSION__: string;
 declare const __HW_BUILD__: string;
 
 const EDGE_PAD = 12;   // css px
+/* A tap with two fingers undoes, with three redoes: each finger lands within
+ * MULTI_TAP_GAP of the one before, all are off the glass within MULTI_TAP_UP
+ * of the second landing, and none moves more than MULTI_TAP_SLOP */
+const MULTI_TAP_GAP = 200;   // ms
+const MULTI_TAP_UP = 300;    // ms
+const MULTI_TAP_SLOP = 10;   // css px
 const ZOOM_MAX = 8;
 
 /** The page is paper: white whatever the theme, with ink in near-black. It is
@@ -28,8 +34,12 @@ const dotPx = (sz: number) => Math.min(sz + 4, 28);
  *  transcribed. Same gesture as the pen, different meaning. */
 type Tool = "pen" | "ai" | "eraser" | "lasso";
 
+/** A change, recorded as how to take it back. Taking one back yields the
+ *  entry that puts it back again, which is how redo works: the two stacks
+ *  trade entries. */
 type UndoEntry =
 	| { kind: "stroke-add"; index: number }
+	| { kind: "stroke-insert"; index: number; stroke: Stroke }
 	| { kind: "strokes-set"; before: Stroke[] }
 	| { kind: "sel-move"; strokes: Stroke[]; dx: number; dy: number };
 
@@ -55,7 +65,7 @@ export interface PadHost {
 }
 
 /** The pad over the whole screen. Closing it, with the close button or Esc,
- *  keeps the page as a draft; converting closes it and hands the page over;
+ *  keeps the pad for next time; converting closes it and hands the page over;
  *  swapping closes it and hands the pad itself on, to be shown in a pane. */
 export class PadModal extends Modal {
 	private converting = false;
@@ -98,7 +108,7 @@ export class PadModal extends Modal {
  *
  *  Not a document: it holds a page of ink until the user either converts it,
  *  which hands the strokes to the plugin to be read, or closes it, which keeps
- *  them as a draft. Nothing here touches the vault.
+ *  it, page and undo history, for next time. Nothing here touches the vault.
  *
  *  The page is a fixed A4 sheet. Zoomed all the way out the whole of it fits
  *  on screen; zoomed in, a finger pans it in either direction. */
@@ -152,10 +162,14 @@ export class InkPad {
 	private get sizes() { return this.plugin.settings.sizes; }
 	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
 	private undoStack: UndoEntry[] = [];
+	private redoStack: UndoEntry[] = [];
 
 	/** Tap detection: recorded on press, discarded once movement passes the
 	 *  threshold, because that is a stroke or a pan rather than a tap */
 	private tap: { x: number; y: number; finger: boolean } | null = null;
+	/** A tap with several fingers in the making, from the first finger down:
+	 *  where the view was then, and where each finger landed */
+	private multiTap: { view: { zoom: number; panX: number; panY: number }; downs: Map<number, { x: number; y: number }>; last: number; second: number } | null = null;
 	private panMoved = false;
 	/** A finger is resting on the selection; the drag starts once it leaves the
 	 *  dead zone */
@@ -190,9 +204,15 @@ export class InkPad {
 	private grid = { n: 0, whole: 0, half: 0, last: 0 };
 	/** Set on the first resize, which is when the page width is known */
 	private placed = false;
-	/** For a pad moved to a new host: the line of the page that was at the top
-	 *  of the view, to carry on from there */
-	private keepTop: number | null = null;
+	/** For a pad mounted again: the view it had, and the canvas size it had
+	 *  it in. The same size gets the same view back; another (a pane after
+	 *  full screen, say) gets the new width filled, on the same part of the
+	 *  page. */
+	private keep: { zoom: number; panX: number; panY: number; w: number; h: number } | null = null;
+	/** The canvas size at the last unmount, for `keep` */
+	private lastSize = { w: 0, h: 0 };
+	/** Whether the pad is on screen: a parked one can still be handed a page */
+	private mounted = false;
 
 	/** Whoever shows the pad now; set on each mount, since the pad can move */
 	private host!: PadHost;
@@ -217,10 +237,11 @@ export class InkPad {
 		// Unknown until measured, so the first applyLayout builds both bars
 		// again in the new place
 		this.narrow = null;
-		// The zoom is relative to the space the page has, so it does not carry
-		// over: a pad moved into a narrower pane would be zoomed in. It is placed
-		// afresh, on the same part of the page.
-		if (this.placed) { this.placed = false; this.keepTop = this.panY; }
+		// The zoom is relative to the space the page has: kept in the same
+		// space, replaced in another, where it would be wrong (a pad moved into
+		// a narrower pane would be zoomed in)
+		if (this.placed) { this.placed = false; this.keep = { zoom: this.zoom, panX: this.panX, panY: this.panY, ...this.lastSize }; }
+		this.mounted = true;
 		const root = this.root = parent.createDiv();
 		// Obsidian's mobile edge swipes walk up from the touch target looking for
 		// this flag, the same opt-out its own sliders use. Without it a finger on
@@ -267,6 +288,9 @@ export class InkPad {
 
 		this.keys = [
 			host.scope.register(["Mod"], "z", () => { this.undo(); return false; }),
+			// Both spellings: with Shift held the key may arrive as "Z"
+			host.scope.register(["Mod", "Shift"], "z", () => { this.redo(); return false; }),
+			host.scope.register(["Mod", "Shift"], "Z", () => { this.redo(); return false; }),
 			host.scope.register(["Mod"], "Enter", () => { this.tryConvert(); return false; }),
 		];
 
@@ -292,12 +316,27 @@ export class InkPad {
 		this.pinch = null;
 		this.panFrom = null;
 		this.plugin.padReport = this.report();
+		const r = this.surface.getBoundingClientRect();
+		this.lastSize = { w: r.width, h: r.height };
+		this.mounted = false;
 		this.root.remove();
 		return this.strokes;
 	}
 
 	/** Whether there is anything on the page */
 	get empty() { return !this.strokes.length; }
+	get strokeCount() { return this.strokes.length; }
+
+	/** Opening a parked pad again: the page, history and view come back, but
+	 *  it starts with the pen in hand, the middle width, nothing selected, as
+	 *  a new pad does. Call before mounting. */
+	takeUpPen() {
+		this.tool = this.lastPen = "pen";
+		this.sizeIdx = 1;
+		this.eraserAt = null;
+		this.lasso = null;
+		this.sel = null;
+	}
 
 	/** Hand the page over and start a clean one, for a host that stays open
 	 *  after converting. The undo history goes with it: undoing back into a
@@ -317,6 +356,9 @@ export class InkPad {
 		this.settleRetract();
 		this.strokes = strokes;
 		this.undoStack = [];
+		this.redoStack = [];
+		// Off screen there is nothing to draw: the next mount draws it all
+		if (!this.mounted) { this.sel = null; return; }
 		this.clearSelection();
 		this.redrawAll();
 	}
@@ -403,6 +445,9 @@ export class InkPad {
 		sep();
 		btn("fit", t("tool.fit"), () => this.fitPage());
 		btn("undo", t("tool.undo"), () => this.undo());
+		// A phone's row has no room for it; three fingers and Mod+Shift+Z redo
+		// there too
+		if (!this.narrow) btn("redo", t("tool.redo"), () => this.redo());
 		btn("trash", t("tool.clear"), () => this.clearPage());
 
 		const go = bar.createEl("button", {
@@ -620,13 +665,21 @@ export class InkPad {
 			cv.style.height = r.height + "px";
 		}
 		if (!this.placed) {
-			// Open at the top of the page, filling the width; a moved pad fills
-			// the new width where it was
+			// Open at the top of the page, filling the width. A pad mounted again
+			// gets its view back in the same space, and in another fills the new
+			// width where it was.
 			this.placed = true;
-			this.zoom = this.widthZoom();
-			this.panX = -Infinity;
-			this.panY = this.keepTop ?? -Infinity;
-			this.keepTop = null;
+			const k = this.keep;
+			this.keep = null;
+			if (k && Math.abs(k.w - r.width) < 1 && Math.abs(k.h - r.height) < 1) {
+				this.zoom = k.zoom;
+				this.panX = k.panX;
+				this.panY = k.panY;
+			} else {
+				this.zoom = this.widthZoom();
+				this.panX = -Infinity;
+				this.panY = k ? k.panY : -Infinity;
+			}
 		}
 		this.clampPan();
 		this.placeCtxBar();
@@ -833,9 +886,17 @@ export class InkPad {
 				// screen while writing would scroll the page
 				if (this.drawing) return;
 				this.stopGlide();
+				if (!this.touches.size) this.multiTap = { view: { zoom: this.zoom, panX: this.panX, panY: this.panY }, downs: new Map(), last: e.timeStamp, second: 0 };
+				const mt = this.multiTap;
+				if (mt && e.timeStamp - mt.last <= MULTI_TAP_GAP) {
+					mt.downs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+					mt.last = e.timeStamp;
+					if (mt.downs.size === 2) mt.second = e.timeStamp;
+				} else this.multiTap = null;
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				el.setPointerCapture(e.pointerId);
-				if (this.touches.size >= 2) { this.panFrom = null; this.fingerOnSel = null; return; }
+				// Several fingers are a pinch or a multi-finger tap, never a tap
+				if (this.touches.size >= 2) { this.panFrom = null; this.fingerOnSel = null; this.tap = null; return; }
 
 				const p = this.toPage(e);
 				this.tap = { x: e.clientX, y: e.clientY, finger: true };
@@ -855,7 +916,7 @@ export class InkPad {
 
 			e.preventDefault();
 			// The pen takes over everything: drop any pan in progress
-			if (!finger) { this.stopGlide(); this.touches.clear(); this.panFrom = null; this.pinch = null; }
+			if (!finger) { this.stopGlide(); this.touches.clear(); this.panFrom = null; this.pinch = null; this.multiTap = null; }
 			el.setPointerCapture(e.pointerId);
 			const pt = this.toPage(e);
 
@@ -910,6 +971,8 @@ export class InkPad {
 			}
 
 			if (this.touches.has(e.pointerId)) {
+				const landed = this.multiTap?.downs.get(e.pointerId);
+				if (landed && Math.hypot(e.clientX - landed.x, e.clientY - landed.y) > MULTI_TAP_SLOP) this.multiTap = null;
 				this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
 				if (this.touches.size >= 2) { this.handlePinch(); return; }
 
@@ -995,6 +1058,21 @@ export class InkPad {
 				if (this.touches.size < 2) this.pinch = null;
 				this.panFrom = this.touches.size === 1 ? { ...[...this.touches.values()][0] } : null;
 			}
+			if (wasFinger && e.type === "pointercancel") this.multiTap = null;
+			if (wasFinger && this.multiTap && !this.touches.size) {
+				const mt = this.multiTap;
+				this.multiTap = null;
+				const n = mt.downs.size;
+				if ((n === 2 || n === 3) && e.timeStamp - mt.second <= MULTI_TAP_UP) {
+					// The fingers may have nudged the view on their way down: put it back
+					this.zoom = mt.view.zoom;
+					this.panX = mt.view.panX;
+					this.panY = mt.view.panY;
+					this.syncViewport();
+					if (n === 2) this.undo(); else this.redo();
+					return;
+				}
+			}
 
 			if (this.selDrag && this.selDrag.id === e.pointerId) {
 				const d = this.selDrag;
@@ -1002,7 +1080,7 @@ export class InkPad {
 				if (d.moved) {
 					// Dragging an empty ring moves no ink: nothing to undo
 					if (this.sel?.strokes.length) {
-						this.undoStack.push({ kind: "sel-move", strokes: [...this.sel.strokes], dx: d.dx, dy: d.dy });
+						this.record({ kind: "sel-move", strokes: [...this.sel.strokes], dx: d.dx, dy: d.dy });
 					}
 				} else if (this.sel) {
 					this.sel.showOpts = !this.sel.showOpts;
@@ -1037,7 +1115,7 @@ export class InkPad {
 				this.eraserAt = null;
 				this.redrawLive();
 				// One erase gesture is one undo step
-				if (snap && snap !== this.strokes) this.undoStack.push({ kind: "strokes-set", before: snap });
+				if (snap && snap !== this.strokes) this.record({ kind: "strokes-set", before: snap });
 				return;
 			}
 			if (this.tool === "lasso") { this.finishLasso(); return; }
@@ -1046,7 +1124,7 @@ export class InkPad {
 				const g = this.grid;
 				if (g.n >= 6) g.last = this.cur.q * 2 * this.scale;
 				this.strokes.push(this.cur);
-				this.undoStack.push({ kind: "stroke-add", index: this.strokes.length - 1 });
+				this.record({ kind: "stroke-add", index: this.strokes.length - 1 });
 				this.finishRetract(this.cur);
 				// Build the other level of detail now, while the pen is up, so a
 				// pinch that crosses SPLINE_FROM never has to stop and build it
@@ -1199,7 +1277,7 @@ export class InkPad {
 	private clearPage() {
 		this.settleRetract();
 		if (!this.strokes.length) return;
-		this.undoStack.push({ kind: "strokes-set", before: this.strokes });
+		this.record({ kind: "strokes-set", before: this.strokes });
 		this.strokes = [];
 		this.clearSelection();
 		this.redrawAll();
@@ -1247,7 +1325,7 @@ export class InkPad {
 		const before = this.strokes;
 		const gone = new Set(this.sel.strokes);
 		this.strokes = before.filter((st) => !gone.has(st));
-		this.undoStack.push({ kind: "strokes-set", before });
+		this.record({ kind: "strokes-set", before });
 		this.sel = null;
 		this.redrawAll();
 		this.rebuildOverlay();
@@ -1284,23 +1362,49 @@ export class InkPad {
 
 	/* ============ Undo ============ */
 
-	private undo() {
+	/** A new change: what was undone before it can no longer be redone */
+	private record(e: UndoEntry) {
+		this.undoStack.push(e);
+		this.redoStack = [];
+	}
+
+	private undo() { this.step(this.undoStack, this.redoStack, "notice.nothingToUndo"); }
+	private redo() { this.step(this.redoStack, this.undoStack, "notice.nothingToRedo"); }
+
+	/** Take back the latest entry of `from`, and file what would put it back
+	 *  in `to` */
+	private step(from: UndoEntry[], to: UndoEntry[], none: "notice.nothingToUndo" | "notice.nothingToRedo") {
 		this.settleRetract();
-		const e = this.undoStack.pop();
-		if (!e) { new Notice(t("notice.nothingToUndo")); return; }
+		const e = from.pop();
+		if (!e) { new Notice(t(none)); return; }
+		to.push(this.revert(e));
+		// The ring no longer describes what is under it
+		this.clearSelection();
+		this.redrawAll();
+	}
+
+	/** Apply the inverse of a change, and return the entry that reapplies it */
+	private revert(e: UndoEntry): UndoEntry {
 		switch (e.kind) {
-			case "stroke-add": this.strokes.splice(e.index, 1); break;
-			case "strokes-set": this.strokes = e.before; break;
+			case "stroke-add": {
+				const [stroke] = this.strokes.splice(e.index, 1);
+				return { kind: "stroke-insert", index: e.index, stroke };
+			}
+			case "stroke-insert":
+				this.strokes.splice(e.index, 0, e.stroke);
+				return { kind: "stroke-add", index: e.index };
+			case "strokes-set": {
+				const now = this.strokes;
+				this.strokes = e.before;
+				return { kind: "strokes-set", before: now };
+			}
 			case "sel-move":
 				for (const st of e.strokes) {
 					for (const p of st.pts) { p.x -= e.dx; p.y -= e.dy; }
 					strokeChanged(st);
 				}
-				break;
+				return { kind: "sel-move", strokes: e.strokes, dx: -e.dx, dy: -e.dy };
 		}
-		// The ring no longer describes what is under it
-		this.clearSelection();
-		this.redrawAll();
 	}
 }
 

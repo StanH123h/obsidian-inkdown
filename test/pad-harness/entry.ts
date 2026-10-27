@@ -49,6 +49,12 @@ w.openPad = (strokes: unknown[] = []) => {
 	w.__exit = null;
 	showFull(new InkPad(plugin as any, strokes as any));
 };
+/** The last pad again, as the plugin opens a parked one */
+w.reopenPad = () => {
+	w.__exit = null;
+	w.__pad.takeUpPen();
+	showFull(w.__pad);
+};
 /** Full screen with the button to move into a pane of this size, as on a tablet */
 w.openSwappable = (width: number, height: number, strokes: unknown[] = []) => {
 	w.__exit = null;

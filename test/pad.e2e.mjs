@@ -382,6 +382,76 @@ try {
 	await shot("full-page");
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- undo and redo: buttons, keys and fingers ---- */
+	await viewport(820, 1180);
+	await js("openPad([])");
+	await frame();
+	const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+	// A tap as fingers really land: a few pixels of drift, within the slop
+	const tapWith = async (points, hold = 60, drift = 4) => {
+		await touch("touchStart", points);
+		await touch("touchMove", points.map(([x, y], i) => [x + (i ? drift : -drift), y]));
+		await wait(hold);
+		await touch("touchEnd", []);
+		await frame();
+	};
+	const look = () => js("({ strokes: __pad.strokes.length, redo: __pad.redoStack.length, zoom: __pad.zoom, panX: __pad.panX, panY: __pad.panY })");
+	for (const y of [300, 360, 420]) await pen(line(150, y, 400, y));
+	let u = await look();
+	const start = u;
+	await button("Undo");
+	await button("Redo");
+	u = await look();
+	ok(u.strokes === 3 && u.redo === 0, `the redo button puts back what undo took: ${JSON.stringify(u)}`);
+	await js("__modalScope.keys.find((k) => k.key === 'z' && k.mods.join() === 'Mod').fn()");
+	await js("__modalScope.keys.find((k) => k.key === 'z' && k.mods.join() === 'Mod,Shift').fn()");
+	u = await look();
+	ok(u.strokes === 3, "and so do Mod+Z, Mod+Shift+Z");
+	await tapWith([[300, 700], [420, 700]]);
+	u = await look();
+	ok(u.strokes === 2 && u.zoom === start.zoom && u.panX === start.panX && u.panY === start.panY, `a two-finger tap undoes and leaves the view as it was: ${JSON.stringify(u)}`);
+	await tapWith([[300, 700], [420, 700], [540, 700]]);
+	u = await look();
+	ok(u.strokes === 3, "a three-finger tap redoes");
+	await tapWith([[300, 700], [420, 700]], 450);
+	u = await look();
+	ok(u.strokes === 3, "two fingers held too long undo nothing");
+	await touch("touchStart", [[350, 700], [450, 700]]);
+	for (let i = 1; i <= 6; i++) await touch("touchMove", [[350 - i * 10, 700], [450 + i * 10, 700]]);
+	await touch("touchEnd", []);
+	await frame();
+	u = await look();
+	ok(u.strokes === 3 && u.zoom > start.zoom, `spreading two fingers zooms and undoes nothing: zoom ${u.zoom.toFixed(2)}`);
+	await tapWith([[300, 700], [420, 700]]);
+	await pen(line(150, 500, 400, 500));
+	u = await look();
+	ok(u.strokes === 3 && u.redo === 0, "a new stroke after undoing: nothing left to redo");
+	await js("window.__notices = []");
+	await tapWith([[300, 700], [420, 700], [540, 700]]);
+	s = await state();
+	ok(s.strokes === 3 && s.notices.includes("Nothing to redo"), `redoing then says there is nothing to redo: ${JSON.stringify(s.notices)}`);
+	await button("Close (your writing is kept for next time)");
+
+	/* ---- closed and opened again: the same pad ---- */
+	await js("openPad([])");
+	await frame();
+	for (const y of [300, 360]) await pen(line(150, y, 400, y));
+	await js("__pad.zoom = 2.2; __pad.panX = 140; __pad.panY = 260; __pad.syncViewport()");
+	const parked = await look();
+	await button("Undo");
+	await button("Lasso: circle ink to move it");
+	await button("Close (your writing is kept for next time)");
+	await js("reopenPad()");
+	await frame();
+	u = await look();
+	ok(u.strokes === 1 && u.redo === 1, `reopened, the page and its history are there: ${JSON.stringify(u)}`);
+	ok(Math.abs(u.zoom - parked.zoom) < 1e-9 && Math.abs(u.panX - parked.panX) < 1e-6 && Math.abs(u.panY - parked.panY) < 1e-6, `and the view is as it was left, in the same space: ${JSON.stringify(u)} (was ${JSON.stringify(parked)})`);
+	ok(await js("__pad.tool") === "pen", "but it opens with the pen, whatever was in hand when it closed");
+	await button("Redo");
+	u = await look();
+	ok(u.strokes === 2, "redo works across closing and opening again");
+	await button("Close (your writing is kept for next time)");
+
 	/* ---- in a pane, and moving between hosts ---- */
 	await viewport(1180, 820);   // landscape, the way split view is used
 	await js("openSwappable(590, 820)");
@@ -389,6 +459,7 @@ try {
 	ok(await js(`!!document.querySelector('button[aria-label="Open beside the note"]')`), "full screen offers the pane where there is one");
 	await pen(line(300, 300, 600, 300));
 	await pen(line(300, 360, 600, 360));
+	const keys = await js("__modalScope.keys.length");
 	await button("Open beside the note");
 	await new Promise((r) => setTimeout(r, 300));
 	const host = () => js(`(() => { const p = __pad, c = p.live.getBoundingClientRect(); return {
@@ -402,7 +473,7 @@ try {
 	ok(!h.modal && h.strokes === 2 && h.undo === 2, `moving into the pane keeps the page and its undo history: ${JSON.stringify(h)}`);
 	ok(h.c[0] > 300 && h.c[0] < 590 && h.c[1] > 700, `the canvas fits the pane: ${h.c}`);
 	ok(h.widthFit, "the page fills the pane's width, rather than keeping a zoom made for the whole screen");
-	ok(h.full && !h.split && h.modalKeys === 0 && h.paneKeys === 2, `the pane offers full screen, and the shortcuts moved with the pad: ${h.modalKeys} left behind, ${h.paneKeys} in the pane`);
+	ok(h.full && !h.split && h.modalKeys === 0 && h.paneKeys === keys && keys > 0, `the pane offers full screen, and the shortcuts moved with the pad: ${h.modalKeys} left behind, ${h.paneKeys} of ${keys} in the pane`);
 	await shot("pane");
 	await pen(line(100, 500, 300, 500));
 	s = await state();
@@ -426,7 +497,7 @@ try {
 	await button("Full screen");
 	await new Promise((r) => setTimeout(r, 300));
 	h = await host();
-	ok(h.modal && h.strokes === 3 && h.paneKeys === 0 && h.modalKeys === 2 && h.c[0] > 900, `back to full screen with the page: ${JSON.stringify(h)}`);
+	ok(h.modal && h.strokes === 3 && h.paneKeys === 0 && h.modalKeys === keys && h.c[0] > 900, `back to full screen with the page: ${JSON.stringify(h)}`);
 	ok(h.widthFit && Math.abs(h.top - topBefore) < 1, `filling the width again, on the same part of the page: top ${h.top} (was ${topBefore})`);
 	await button("Close (your writing is kept for next time)");
 	s = await state();

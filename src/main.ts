@@ -76,10 +76,11 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 export default class HandwritingPlugin extends Plugin {
 	settings: HandwritingSettings = DEFAULT_SETTINGS;
 
-	/** What was on the pad when it was last closed without converting, or when
-	 *  a conversion failed. Memory only: it is scratch paper, not a document,
-	 *  and keeping it out of the vault is the whole idea. */
-	private draft: Stroke[] = [];
+	/** The pad as it was last closed without converting, with its page, undo
+	 *  history and view, to carry on with where it was left; or one holding a
+	 *  failed conversion's page. Memory only: it is scratch paper, not a
+	 *  document, and keeping it out of the vault is the whole idea. */
+	private parked: InkPad | null = null;
 	private inFlight = 0;
 	/** The placeholders of conversions still out. An answer finds its own by
 	 *  its text, so no two may read the same, as two sent within one second
@@ -190,7 +191,7 @@ export default class HandwritingPlugin extends Plugin {
 		// One pad at a time: a pane already open is brought forward
 		const open = this.app.workspace.getLeavesOfType(PAD_VIEW)[0];
 		if (open) { void this.app.workspace.revealLeaf(open); return; }
-		const pad = new InkPad(this, this.takeDraft());
+		const pad = this.takePad();
 		if (this.settings.padMode === "split" && !Platform.isPhone) this.showSplit(pad);
 		else this.showFull(pad);
 	}
@@ -210,9 +211,9 @@ export default class HandwritingPlugin extends Plugin {
 		};
 		new PadModal(this.app, pad, (exit) => {
 			this.shown = null;
-			if (!exit.convert) this.draft = exit.strokes;
+			if (!exit.convert) this.parked = pad;
 			else if (view && file) void this.convert(view, file, exit.strokes);
-			else { this.draft = exit.strokes; new Notice(t("notice.noNote")); }
+			else { this.parked = pad; new Notice(t("notice.noNote")); }
 		}, toPane).open();
 	}
 
@@ -224,11 +225,11 @@ export default class HandwritingPlugin extends Plugin {
 		void this.app.workspace.getLeaf("split", "vertical").setViewState({ type: PAD_VIEW, active: true });
 	}
 
-	/** The pad for a pane that is opening: the one being moved into it, or a
-	 *  new one with the draft when Obsidian reopens the pane by itself, as it
-	 *  does at startup when the pane was open before */
+	/** The pad for a pane that is opening: the one being moved into it, or the
+	 *  parked one when Obsidian reopens the pane by itself, as it does at
+	 *  startup when the pane was open before */
 	receivePad(): InkPad {
-		const pad = this.handoff ?? new InkPad(this, this.takeDraft());
+		const pad = this.handoff ?? this.takePad();
 		this.handoff = null;
 		this.shown = pad;
 		this.inPane = true;
@@ -236,19 +237,20 @@ export default class HandwritingPlugin extends Plugin {
 		return pad;
 	}
 
-	/** A pane was closed: its page is kept as the draft */
-	padClosed(strokes: Stroke[]) {
+	/** A pane was closed: its pad is parked, for next time */
+	padClosed(pad: InkPad) {
 		this.shown = null;
 		this.inPane = false;
-		this.draft = strokes;
+		this.parked = pad;
 		this.showTargets();
 	}
 
-	/** The draft, for a pad that is opening; from now on it lives there */
-	private takeDraft(): Stroke[] {
-		const strokes = this.draft;
-		this.draft = [];
-		return strokes;
+	/** The pad to open: the one left parked, back to the pen, or a clean one */
+	private takePad(): InkPad {
+		const pad = this.parked ?? new InkPad(this, []);
+		this.parked = null;
+		pad.takeUpPen();
+		return pad;
 	}
 
 	/** Where a page from the pane goes: the Markdown note last worked in, as
@@ -325,14 +327,14 @@ export default class HandwritingPlugin extends Plugin {
 			const msg = (e as Error)?.message ?? String(e);
 			this.last["state"] = "failed: " + msg;
 			await this.settle(file, marker, "").catch(() => { /* the note may be gone; nothing to tidy */ });
-			// The writing goes back in the pad: onto it if it is open, into the
-			// draft if not. Unless something new has been started there since --
-			// the two pages would land on top of each other.
-			const pad = this.shown;
-			if (pad ? !pad.empty : this.draft.length) new Notice(t("notice.failedNotRestored", msg), 12000);
+			// The writing goes back in the pad: the one on screen, or the one
+			// parked, or a new parked one. Unless something new has been started
+			// there since -- the two pages would land on top of each other.
+			const pad = this.shown ?? this.parked;
+			if (pad && !pad.empty) new Notice(t("notice.failedNotRestored", msg), 12000);
 			else {
 				if (pad) pad.setPage(strokes);
-				else this.draft = strokes;
+				else this.parked = new InkPad(this, strokes);
 				new Notice(t("notice.failed", msg), 12000);
 			}
 		} finally {
@@ -431,7 +433,7 @@ export default class HandwritingPlugin extends Plugin {
 			"service": s.provider === "openai" ? `openai-compatible, ${s.openaiBaseUrl}` : "anthropic",
 			"model": s.provider === "openai" ? s.openaiModel : s.anthropicModel,
 			"api key": !secret ? "not linked" : this.apiKey() ? `linked (${secret})` : `linked to "${secret}", which is empty on this device`,
-			"draft strokes": String(this.draft.length),
+			"draft strokes": String(this.parked?.strokeCount ?? 0),
 			"pad": `opens ${this.settings.padMode === "split" && !Platform.isPhone ? "beside the note" : "full screen"}${this.shown ? ", open now" : ""}`,
 			"in flight": String(this.inFlight),
 		};

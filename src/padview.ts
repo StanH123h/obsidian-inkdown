@@ -9,9 +9,9 @@ export const PAD_VIEW = "inkdown-pad";
 /** The pad in a pane beside the note, so the note stays in view while writing.
  *
  *  Converting leaves it open: the page goes into the note last worked in, at
- *  its cursor, and a clean page takes its place. Closing the pane keeps the
- *  page as a draft; swapping hands the pad itself on, to be shown over the
- *  whole screen. */
+ *  its cursor, and a clean page takes its place. Closing the pane parks the
+ *  pad, page and history, for next time; swapping hands it on, to be shown
+ *  over the whole screen. */
 export class PadView extends ItemView {
 	/** This pane's own layer of shortcuts. Obsidian puts it on top while the
 	 *  pane is the active one, so undo here undoes ink, and in the note, typing. */
@@ -56,8 +56,8 @@ export class PadView extends ItemView {
 		const pad = this.pad;
 		if (!pad) return;
 		this.pad = null;
-		const strokes = pad.unmount();
-		if (!this.swapping) { this.plugin.padClosed(strokes); return; }
+		pad.unmount();
+		if (!this.swapping) { this.plugin.padClosed(pad); return; }
 		this.plugin.settings.padMode = "full";
 		void this.plugin.saveSettings();
 		this.plugin.showFull(pad);
