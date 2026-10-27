@@ -189,6 +189,7 @@ export const ICONS = {
 	trash: ["M4 7h16", "M9 7V5h6v2", "M7 7l1 13h8l1-13"],
 	fit: ["M4 9V5h4", "M20 9V5h-4", "M4 15v4h4", "M20 15v4h-4"],
 	undo: ["M4 10h10.5a4.5 4.5 0 0 1 0 9H9", "M4 10l4-4", "M4 10l4 4"],
+	redo: ["M20 10H9.5a4.5 4.5 0 0 0 0 9H15", "M20 10l-4-4", "M20 10l-4 4"],
 	close: ["M6 6l12 12", "M18 6L6 18"],
 	/* Moving the pad, drawn the way macOS and iPadOS draw window tiling: a
 	 * screen with the part the pad will take filled in, the right half or all

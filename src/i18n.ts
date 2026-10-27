@@ -19,6 +19,7 @@ const STR = {
 	"tool.lasso": ["Lasso: circle ink to move it", "套索：圈住笔迹来移动"],
 	"tool.fit": ["Whole page / page width", "整页 / 页宽"],
 	"tool.undo": ["Undo", "撤销"],
+	"tool.redo": ["Redo", "重做"],
 	"tool.clear": ["Clear the page", "清空整页"],
 	"tool.close": ["Close (your writing is kept for next time)", "关闭（字迹会留到下次）"],
 	"tool.convert": ["Convert", "转换"],
@@ -45,6 +46,7 @@ const STR = {
 
 	/* notices */
 	"notice.nothingToUndo": ["Nothing to undo", "没有可撤销的操作"],
+	"notice.nothingToRedo": ["Nothing to redo", "没有可重做的操作"],
 	"notice.strokesDeleted": ["Deleted {0} strokes", "已删除 {0} 条笔迹"],
 	"notice.noNote": ["Open a note first: the result goes in at its cursor", "先打开一篇笔记：识别结果会插到它的光标处"],
 	"notice.empty": ["Nothing written yet", "还没写任何东西"],

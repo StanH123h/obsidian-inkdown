@@ -74,7 +74,7 @@ const settle = async (cond) => { for (let i = 0; i < 2000 && !cond(); i++) await
  *  @param sameSecond  send them all within one second
  *  @param between  done to the note after each page is sent but the last
  *  @param waiting  looks at the note once all are sent, before any answer */
-async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')], sameSecond = false, between, waiting, pad } = {}) {
+async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')], sameSecond = false, between, waiting, pad, parked, after } = {}) {
   const ed = editor('Proof:\n');
   const file = { path: 'Note.md', basename: 'Note' };
   const view = Object.assign(new stub.MarkdownView(), { file, editor: ed, getMode: () => 'source', containerEl: { isConnected: true } });
@@ -86,6 +86,7 @@ async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')]
   const plugin = new Plugin(app, { version: 'test' });
   plugin.settings = { ...plugin.settings, anthropicSecret: 'key' };
   if (pad) plugin.shown = pad;
+  if (parked) plugin.parked = parked;
   const held = [];
   stub.setResponder(() => new Promise((resolve) => held.push(resolve)));
   stub.notices.length = 0;
@@ -98,6 +99,7 @@ async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')]
   }
   waiting?.(ed.getValue());
   for (const i of order) { held[i](replies[i]); await jobs[i]; }
+  after?.(plugin);
   return ed.shown();
 }
 
@@ -135,6 +137,15 @@ async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')]
   ok(!failed.includes('⏳') && failed.includes('B') && !failed.includes('A'), `the failed page leaves no placeholder, and the other answer still lands: ${JSON.stringify(failed)}`);
   ok(back?.[0]?.pts.length === 60, 'the failed page, not the other one, goes back on the open pad');
   ok(stub.notices.some((m) => m.startsWith('Recognition failed')), 'and says so');
+
+  // With no pad on screen, it goes into the parked one, or a new parked one;
+  // never over a parked page with writing on it
+  let kept = null;
+  await run([0], { replies: [refusal], after: (p) => { kept = p.parked; } });
+  ok(kept?.strokeCount === 1 && kept.strokes[0].pts.length === 60, `no pad open, nothing parked: the failed page is parked for next time (${kept?.strokeCount} strokes)`);
+  let over = false;
+  await run([0], { replies: [refusal], parked: { empty: false, setPage: () => { over = true; } } });
+  ok(!over && stub.notices.some((m) => m.includes('was not put back')), 'a parked page with writing on it is left alone, and the notice says so');
 
   console.log(bad ? `\n${bad} of ${n} checks failed` : `PASS convert: ${n} checks`);
   process.exit(bad ? 1 : 0);
