@@ -64,6 +64,9 @@ export interface PadHost {
 	/** The button that moves the pad, page and all, to the other way of being
 	 *  shown. Left out where there is no other way: a phone has no split view. */
 	swap?: { to: PadMode; go(): void };
+	/** Told which edge the tool bar is by, each time it is laid out there, so
+	 *  a host showing something of its own over the pad can keep clear of it */
+	toolbarAt?(side: ToolbarSide): void;
 }
 
 /** The pad over the whole screen. Closing it, with the close button or Esc,
@@ -443,6 +446,7 @@ export class InkPad {
 		this.buildToolbar();
 		this.buildContextBar();
 		this.placeCards();
+		this.host.toolbarAt?.(this.side);
 	}
 
 	/** The edge the tool bar floats by. A narrow pad has room for a row only:

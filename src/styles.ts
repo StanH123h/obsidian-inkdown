@@ -196,10 +196,11 @@ export const S = {
 		"display:inline-block;width:3px;height:1.3em;margin:0 -1.5px;vertical-align:-0.3em;" +
 		"border-radius:1.5px;pointer-events:none;background:var(--interactive-accent, #8a6cf0);",
 
-	// Which note a pane's page goes into, at the top of the pane. The pen
-	// writes straight through it.
-	target:
-		"position:absolute;z-index:30;top:8px;left:50%;transform:translateX(-50%);max-width:60%;" +
+	// Which note a pane's page goes into, across the pane from the tool bar:
+	// at the top, unless the tool bar is. The pen writes straight through it.
+	target: (toolbarAt: string) =>
+		(toolbarAt === "top" ? "bottom:8px;" : "top:8px;") +
+		"position:absolute;z-index:30;left:50%;transform:translateX(-50%);max-width:60%;" +
 		"padding:3px 10px;border-radius:11px;font-size:12px;line-height:18px;" +
 		"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;" +
 		`color:${MUTED};background:var(--background-primary, #fff);border:1px solid ${BORDER};opacity:.92;`,

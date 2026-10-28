@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { ghostCaret, refreshGhosts } from "../../src/ghost";
 import { InkPad, PadModal } from "../../src/pad";
+import { S } from "../../src/styles";
 import { InkOpts, Stroke, build, drawStroke, rasterize } from "../../src/ink";
 
 const settings = {
@@ -36,12 +37,16 @@ const showPane = (pad: InkPad, width: number, height: number) => {
 	pane = document.body.createDiv({ attr: { style: `position:fixed;left:0;top:0;width:${width}px;height:${height}px;display:flex;overflow:hidden;` } });
 	const scope = new Scope();
 	const leave = () => { const strokes = pad.unmount(); pane?.remove(); pane = null; return strokes; };
+	// The note's name, kept across from the tool bar as PadView keeps it
+	let label: HTMLElement | null = null, at = "right";
 	pad.mount(pane, {
 		scope,
 		close: () => { w.__exit = { strokes: leave(), convert: false }; },
 		convert: () => { w.__sent = pad.takePage(); },
 		swap: { to: "full", go: () => { leave(); showFull(pad, [width, height]); } },
+		toolbarAt: (side) => { at = side; label?.setAttribute("style", S.target(side)); },
 	});
+	label = pane.createDiv({ text: "Into: Calculus", attr: { style: S.target(at), id: "pane-target" } });
 	w.__paneScope = scope;
 	w.__pad = pad;
 };
