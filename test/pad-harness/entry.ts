@@ -9,7 +9,7 @@ import { InkOpts, Stroke, build, drawStroke, rasterize } from "../../src/ink";
 const settings = {
 	sizes: [4, 8, 14], eraserMode: "stroke", eraserSize: 14, smooth: 0.55, thin: 0.7, taper: 1, filter: 1,
 	predict: 2, lowLatency: true, allowFinger: false, dialX: -1, dialY: -1, curve: 1,
-	toolbarSide: "right", toolbarHintSeen: true,
+	toolbarSide: "right", toolbarHintSeen: true, undoTapShown: true, redoTapShown: true,
 };
 const plugin = {
 	settings,

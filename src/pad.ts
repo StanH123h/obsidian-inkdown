@@ -3,7 +3,7 @@ import {
 	InkOpts, NOTE_INK, PAGE_H, PAGE_W, SPLINE_FROM, Stroke,
 	clipToPage, drawStroke, erasePrecise, hitStroke, pageInkBounds, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
 } from "./ink";
-import { CARD_EDGE, CARD_GAP, CTX_H, CTX_W, ICONS, MODAL, S, drawIcon } from "./styles";
+import { CARD_EDGE, CARD_GAP, CTX_H, CTX_W, ICONS, MODAL, S, TAP_DOT, TAP_LABEL, TAP_MS, TAP_RING, drawIcon } from "./styles";
 import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
 import { buildEraserDial, Dial } from "./dial";
@@ -236,6 +236,10 @@ export class InkPad {
 		slots: Map<ToolbarSide, { el: HTMLElement; x: number; y: number; w: number; h: number }>; near: ToolbarSide } | null = null;
 	/** The hint on moving the tool bar, until it has done its job */
 	private hint: HTMLElement | null = null;
+	/** What last pressed the tool bar: a mouse is not shown finger gestures */
+	private toolbarPointer = "";
+	/** The fingertips showing a tap, while they do */
+	private tapDemo: HTMLElement | null = null;
 	/** The open "⋯" menu, and the scrim under it */
 	private menu: HTMLElement | null = null;
 	private scrim: HTMLElement | null = null;
@@ -360,6 +364,7 @@ export class InkPad {
 		this.hold?.();
 		this.drag = null;
 		this.hint = null;
+		this.tapDemo = null;
 		this.mounted = false;
 		this.root.remove();
 		return this.strokes;
@@ -505,8 +510,8 @@ export class InkPad {
 		aiBtn.createDiv({ text: "AI", attr: { style: S.btnBadge + `color:${NOTE_INK};` } });
 		const lasBtn = btn("lasso", t("tool.lasso"), () => this.setTool("lasso"));
 		sep();
-		btn("undo", t("tool.undo"), () => this.undo());
-		btn("redo", t("tool.redo"), () => this.redo());
+		btn("undo", t("tool.undo"), () => { this.undo(); this.teachTap("undo"); });
+		btn("redo", t("tool.redo"), () => { this.redo(); this.teachTap("redo"); });
 		const more: HTMLElement = btn("more", t("tool.more"), () => this.openMenu(more));
 		more.setAttribute("style", off + S.btnStacked);
 		more.createDiv({ text: t("tool.moreLabel"), attr: { style: S.btnCaption } });
@@ -664,6 +669,7 @@ export class InkPad {
 	 *  the click away from the button. */
 	private bindToolbarDrag() {
 		this.tools.addEventListener("pointerdown", (e: PointerEvent) => {
+			this.toolbarPointer = e.pointerType;
 			if (this.hold || this.drag || e.button !== 0) return;
 			const doc = this.root.ownerDocument;
 			const move = (ev: PointerEvent) => {
@@ -784,6 +790,45 @@ export class InkPad {
 	private dismissHint() {
 		this.hint?.remove();
 		this.hint = null;
+	}
+
+	/* ============ Showing the finger taps ============ */
+
+	/** Undo or redo pressed by hand: the first time, show the tap that does it
+	 *  too. Once each, whether or not the tap has been used: a stray touch uses
+	 *  it as well, and says nothing of whether it is known. Not for a mouse,
+	 *  which has no fingers to tap with, nor while a finger writes, which
+	 *  turns the taps off. */
+	private teachTap(what: "undo" | "redo") {
+		const s = this.plugin.settings;
+		const shown = what === "undo" ? s.undoTapShown : s.redoTapShown;
+		if (shown || s.allowFinger || this.toolbarPointer === "mouse") return;
+		if (what === "undo") s.undoTapShown = true; else s.redoTapShown = true;
+		void this.plugin.saveSettings();
+		this.showTapDemo(what === "undo" ? 2 : 3, t(what === "undo" ? "hint.twoFingers" : "hint.threeFingers"));
+	}
+
+	/** Fingertips in the middle of the page's part of the canvas, clear of the
+	 *  cards, tapping twice, with a word on what the tap does. Gone by itself
+	 *  in TAP_MS; nothing in it takes a touch, so writing goes on meanwhile. */
+	private showTapDemo(n: number, label: string) {
+		this.tapDemo?.remove();
+		const r = this.room, W = this.surface.clientWidth, H = this.surface.clientHeight;
+		const x = r.left + (W - r.left - r.right) / 2, y = r.top + (H - r.top - r.bottom) * 0.46;
+		const demo = this.tapDemo = this.root.createDiv({ attr: { style: S.tapDemo + `left:${x}px;top:${y}px;` } });
+		// Staggered a little, as fingers are
+		const at = n === 2 ? [[-38, 6], [38, -6]] : [[-70, 10], [0, -8], [70, 4]];
+		const timing = { duration: TAP_MS, fill: "forwards" as const };
+		for (const [dx, dy] of at) {
+			const place = `left:${dx}px;top:${dy}px;`;
+			demo.createDiv({ attr: { style: S.tapRing + place } }).animate(TAP_RING, timing);
+			demo.createDiv({ attr: { style: S.tapDot + place } }).animate(TAP_DOT, timing);
+		}
+		demo.createDiv({ text: label, attr: { style: S.tapLabel } }).animate(TAP_LABEL, timing);
+		window.setTimeout(() => {
+			demo.remove();
+			if (this.tapDemo === demo) this.tapDemo = null;
+		}, TAP_MS);
 	}
 
 	/** Over a column, its arrow at the grip, where there is room; otherwise
