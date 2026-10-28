@@ -1,7 +1,7 @@
 {
   "id": "inkdown",
   "name": "Inkdown",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "minAppVersion": "1.11.4",
   "description": "Write by hand on a tablet and get Markdown at the cursor: text, LaTeX and Mermaid, read from your handwriting by Claude or another vision model.",
   "author": "lubenwei",
