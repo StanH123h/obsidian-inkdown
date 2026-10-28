@@ -606,23 +606,37 @@ export function pathToCanvas(cx: CanvasRenderingContext2D, path: [number, number
 
 /* ============ Export ============ */
 
-/** Page-unit bounds of everything written, widened by each stroke's own
- *  radius so the outermost ink is not shaved off. Null for an empty page. */
-export function inkBounds(strokes: Stroke[]): Box | null {
+/** The bounds of the ink that shows: on the page. The page is the paper, and
+ *  ink past its edge is kept, so a stroke can run out and back in, but never
+ *  drawn. Counted from the samples whose stroke width reaches the page, then
+ *  cut to it. Null when none of the ink shows. */
+export function pageInkBounds(strokes: Stroke[]): Box | null {
 	let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
 	for (const st of strokes) {
 		const r = st.s / 2;
 		for (const p of st.pts) {
+			if (p.x + r < 0 || p.x - r > PAGE_W || p.y + r < 0 || p.y - r > PAGE_H) continue;
 			if (p.x - r < x0) x0 = p.x - r; if (p.x + r > x1) x1 = p.x + r;
 			if (p.y - r < y0) y0 = p.y - r; if (p.y + r > y1) y1 = p.y + r;
 		}
 	}
 	if (!isFinite(x0)) return null;
+	x0 = Math.max(x0, 0); y0 = Math.max(y0, 0);
+	x1 = Math.min(x1, PAGE_W); y1 = Math.min(y1, PAGE_H);
 	return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
+/** Limit what is drawn next to the page, in page units: ink past its edge is
+ *  not shown, nor sent to be read */
+export function clipToPage(cx: CanvasRenderingContext2D) {
+	cx.beginPath();
+	cx.rect(0, 0, PAGE_W, PAGE_H);
+	cx.clip();
+}
+
 /** Render the ink on white, cropped to what was written, for a vision model to
- *  read: the content black, the AI pen's notes in NOTE_INK.
+ *  read: the content black, the AI pen's notes in NOTE_INK. Only what is on the
+ *  page: what the user cannot see, the model does not get either.
  *
  *  Cropping matters more than it looks: a few lines in the corner of a page
  *  would otherwise arrive as a small smudge in a large white image, at a
@@ -631,7 +645,7 @@ export function inkBounds(strokes: Stroke[]): Box | null {
  *  themselves, and a 2x cap keeps a single word from being blown up into a
  *  blur of interpolated pixels. Always black on white, whatever the theme. */
 export function rasterize(strokes: Stroke[], opt: InkOpts, maxEdge: number): HTMLCanvasElement | null {
-	const b = inkBounds(strokes);
+	const b = pageInkBounds(strokes);
 	if (!b) return null;
 	const pad = 24;
 	const w = b.w + pad * 2, h = b.h + pad * 2;
@@ -643,6 +657,7 @@ export function rasterize(strokes: Stroke[], opt: InkOpts, maxEdge: number): HTM
 	cx.fillStyle = "#ffffff";
 	cx.fillRect(0, 0, cv.width, cv.height);
 	cx.setTransform(scale, 0, 0, scale, (pad - b.x) * scale, (pad - b.y) * scale);
+	clipToPage(cx);
 	for (const st of strokes) drawStroke(cx, { ...st, c: st.ai ? NOTE_INK : "#000000" }, opt);
 	return cv;
 }

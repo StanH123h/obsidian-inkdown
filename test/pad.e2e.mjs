@@ -540,6 +540,73 @@ try {
 	ok(u.strokes === 2, "redo works across closing and opening again");
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- the page's edge: ink past it is kept, never shown nor sent ---- */
+	// Landscape, the whole page in view: desk on both sides of it
+	await viewport(1180, 820);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	await js("__pad.zoom = 1; __pad.syncViewport()");
+	await new Promise((r) => setTimeout(r, 100));
+	const edge = (await layout()).page;
+	// Whether there is ink at a point on screen, on the page layer or the live one
+	const inkAt = (x, y, layer = "base") => js(`(() => { const c = __pad.${layer}, r = c.getBoundingClientRect(), d = c.width / r.width;
+		const p = c.getContext("2d").getImageData(Math.round((${x} - r.left) * d), Math.round((${y} - r.top) * d), 1, 1).data;
+		return p[3] > 0 && p[0] < 120 && p[1] < 120 && p[2] < 120; })()`);
+	ok(edge.l > 150, `(there is desk left of the page to write on: page from ${edge.l.toFixed(0)})`);
+	const yA = edge.t + 150;
+	// Down on the desk, onto the page: ink from the edge on, one stroke
+	await send("Input.dispatchMouseEvent", { type: "mousePressed", x: edge.l - 120, y: yA, button: "left", buttons: 1, clickCount: 1, pointerType: "pen", force: 0.5 });
+	for (const [x, y] of line(edge.l - 120, yA, edge.l + 120, yA).slice(1))
+		await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1, pointerType: "pen", force: 0.5 });
+	await frame();
+	const live = { out: await inkAt(edge.l - 60, yA, "live"), on: await inkAt(edge.l + 60, yA, "live") };
+	await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: edge.l + 120, y: yA, button: "left", buttons: 0, clickCount: 1, pointerType: "pen" });
+	await new Promise((r) => setTimeout(r, 250));
+	ok(live.on && !live.out, `while it is being written, only the part on the page shows: ${JSON.stringify(live)}`);
+	let es = { strokes: (await state()).strokes, out: await inkAt(edge.l - 60, yA), on: await inkAt(edge.l + 60, yA) };
+	ok(es.strokes === 1 && es.on && !es.out, `a stroke begun on the desk inks from the page's edge on, and is one stroke: ${JSON.stringify(es)}`);
+	// Out and back in, twice, in one go: ink in pieces, one stroke
+	const yB = edge.t + 300;
+	const zig = [[edge.l + 80, yB], [edge.l - 80, yB + 40], [edge.l + 80, yB + 80], [edge.l - 80, yB + 120], [edge.l + 80, yB + 160]];
+	const zigPts = zig.slice(1).flatMap(([x, y], i) => line(zig[i][0], zig[i][1], x, y, 16).slice(i ? 1 : 0));
+	await pen(zigPts);
+	await new Promise((r) => setTimeout(r, 250));
+	// Looked at 40px either side of the edge on each leg, clear of the
+	// stroke's tapered ends
+	const across40 = (dx) => zig.slice(1).map(([x, y], i) => { const [x0, y0] = zig[i], f = (edge.l + dx - x0) / (x - x0); return [edge.l + dx, y0 + f * (y - y0)]; });
+	const pieces = { strokes: (await state()).strokes, on: [], out: [] };
+	for (const [x, y] of across40(40)) pieces.on.push(await inkAt(x, y));
+	for (const [x, y] of across40(-40)) pieces.out.push(await inkAt(x, y));
+	ok(pieces.strokes === 2 && pieces.on.every(Boolean) && !pieces.out.some(Boolean), `out past the edge and back, twice: the ink shows in pieces, one stroke: ${JSON.stringify(pieces)}`);
+	// And the same once the whole page is painted again, as on any zoom or pan
+	await js("__pad.syncViewport()");
+	await frame();
+	const repainted = { on: [], out: [await inkAt(edge.l - 60, yA)] };
+	for (const [x, y] of across40(40)) repainted.on.push(await inkAt(x, y));
+	for (const [x, y] of across40(-40)) repainted.out.push(await inkAt(x, y));
+	ok(repainted.on.every(Boolean) && !repainted.out.some(Boolean), `painted afresh, still only what is on the page: ${JSON.stringify(repainted)}`);
+	await shot("page-edge");
+	await button("Undo");
+	const gone = { strokes: (await state()).strokes, on: [] };
+	for (const [x, y] of across40(40)) gone.on.push(await inkAt(x, y));
+	ok(gone.strokes === 1 && !gone.on.some(Boolean), `one undo takes the whole of it, every piece: ${JSON.stringify(gone)}`);
+	await button("Close (your writing is kept for next time)");
+	// What is sent: cut to the page, and nothing at all for ink all off it
+	const size = (strokes) => js(`(() => { const u = rasterize(${JSON.stringify(strokes)}); if (!u) return null; return new Promise((r) => { const i = new Image(); i.onload = () => r([i.width, i.height]); i.src = u; }); })()`);
+	const across = { c: "#222", s: 6, pts: Array.from({ length: 41 }, (_, i) => ({ x: -200 + 10 * i, y: 100, p: 0.5 })) };
+	const onlyOn = { c: "#222", s: 6, pts: across.pts.filter((p) => p.x >= 0) };
+	const off = { c: "#222", s: 6, pts: across.pts.filter((p) => p.x < -10) };
+	const sz = { across: await size([across]), onlyOn: await size([onlyOn]), off: await size([off]) };
+	ok(sz.across && sz.onlyOn && sz.across.join() === sz.onlyOn.join() && sz.off === null, `the image for the model is cut to the page; ink all off it makes none: ${JSON.stringify(sz)}`);
+	await js(`openPad(${JSON.stringify([off])})`);
+	await new Promise((r) => setTimeout(r, 200));
+	await js("window.__notices = []");
+	await button("Turn this into Markdown at the cursor");
+	s = await state();
+	ok(s.open && s.notices.includes("Nothing written yet") && s.strokes === 1, `a page whose ink is all off it converts as an empty one, and keeps the ink: ${JSON.stringify({ open: s.open, notices: s.notices, strokes: s.strokes })}`);
+	await button("Close (your writing is kept for next time)");
+	await viewport(820, 1180);
+
 	/* ---- the cards: floating over the canvas, clear of the page ---- */
 	for (const [w, hgt, name] of [[820, 1180, "upright"], [1180, 820, "landscape"]]) {
 		await viewport(w, hgt);

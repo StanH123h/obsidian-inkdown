@@ -1,7 +1,7 @@
 import { App, KeymapEventHandler, Modal, Notice, Scope } from "obsidian";
 import {
 	InkOpts, NOTE_INK, PAGE_H, PAGE_W, SPLINE_FROM, Stroke,
-	drawStroke, erasePrecise, hitStroke, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
+	clipToPage, drawStroke, erasePrecise, hitStroke, pageInkBounds, pathToCanvas, pointInPoly, polyBounds, strokeChanged, strokeInPoly, strokePath, strokeRev,
 } from "./ink";
 import { CARD_EDGE, CARD_GAP, CTX_H, CTX_W, ICONS, MODAL, S, drawIcon } from "./styles";
 import { t } from "./i18n";
@@ -427,7 +427,8 @@ export class InkPad {
 	/** The convert button. Checked here rather than after closing, so a missing
 	 *  key leaves you on the page you wrote instead of throwing it away. */
 	private tryConvert() {
-		if (!this.strokes.length) { new Notice(t("notice.empty")); return; }
+		// Ink all past the page's edge shows nothing, and would send nothing
+		if (!pageInkBounds(this.strokes)) { new Notice(t("notice.empty")); return; }
 		const problem = this.plugin.convertBlocker();
 		if (problem) { new Notice(problem); return; }
 		this.host.convert();
@@ -1078,17 +1079,29 @@ export class InkPad {
 		cx.strokeStyle = "rgba(0,0,0,.22)";
 		cx.strokeRect(0, 0, PAGE_W, PAGE_H);
 
-		// Zoomed in, most of the page is off screen; skip the ink that is
+		// Zoomed in, most of the page is off screen; skip the ink that is. Ink
+		// past the page's edge is kept but not shown: the page is the paper.
 		const x0 = this.panX - 40, x1 = this.panX + this.viewW + 40;
 		const y0 = this.panY - 40, y1 = this.panY + this.viewH + 40;
+		cx.save();
+		clipToPage(cx);
 		for (const st of this.strokes) {
 			if (st === this.retract?.st) continue;   // still on the live layer
 			const b = bboxOf(st);
 			if (b.x1 < x0 || b.x0 > x1 || b.y1 < y0 || b.y0 > y1) continue;
 			this.fillStroke(cx, st);
 		}
+		cx.restore();
 		this.redrawLive();
 		push(this.perf.paint, performance.now() - t0);
+	}
+
+	/** Put a finished stroke on the page layer, what of it is on the page */
+	private paintOnPage(st: Stroke) {
+		this.bctx.save();
+		clipToPage(this.bctx);
+		this.fillStroke(this.bctx, st);
+		this.bctx.restore();
 	}
 
 	/** Fill a finished stroke from its cached outline at the current level of
@@ -1125,8 +1138,13 @@ export class InkPad {
 		this.applyTransform(this.lctx);
 		// Predicted points are drawn but never stored; the next batch of real
 		// samples discards and recomputes them
+		// Ink only where the page is: a stroke can run off it and back on, and
+		// shows in pieces
+		this.lctx.save();
+		clipToPage(this.lctx);
 		if (this.cur) drawStroke(this.lctx, this.cur, this.lod(), this.drawing ? this.plugin.settings.predict : 0);
 		if (this.retract) drawStroke(this.lctx, this.retract.st, this.lod(), this.plugin.settings.predict, this.retract.reach);
+		this.lctx.restore();
 		if (this.lasso) this.drawRing(this.lctx, this.lasso, true);
 		if (this.sel) this.drawRing(this.lctx, this.sel.path, false);
 		// Eraser preview: how big the eraser is and where it currently sits
@@ -1151,7 +1169,7 @@ export class InkPad {
 	 *  stroke jumping. */
 	private finishRetract(st: Stroke) {
 		this.settleRetract();
-		if (!this.plugin.settings.predict) { this.fillStroke(this.bctx, st); return; }
+		if (!this.plugin.settings.predict) { this.paintOnPage(st); return; }
 		this.retract = { st, reach: 1 };
 		const step = () => {
 			const r = this.retract;
@@ -1172,7 +1190,7 @@ export class InkPad {
 		this.retract = null;
 		// Onto the page first, then off the live layer, so there is no frame
 		// with the stroke on neither
-		if (this.strokes.includes(r.st)) this.fillStroke(this.bctx, r.st);
+		if (this.strokes.includes(r.st)) this.paintOnPage(r.st);
 		this.redrawLive();
 	}
 
