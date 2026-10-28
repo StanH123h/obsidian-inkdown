@@ -95,7 +95,7 @@ w.crackCheck = (curve: number) => {
 	const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
 	const g = (sd: number) => { let u = 0; for (let i = 0; i < 6; i++) u += rnd(); return (u - 3) * sd / Math.sqrt(0.5); };
 	const paths: [number, number][][] = [];
-	// a slow 横折 corner, a fast loop, and a zigzag that doubles back on itself
+	// a slow across-and-down corner, a fast loop, and a zigzag that doubles back on itself
 	paths.push([...Array.from({ length: 50 }, (_, i) => [10 + 30 * i / 49, 10] as [number, number]),
 		...Array.from({ length: 50 }, (_, i) => [40, 10 + 30 * i / 49] as [number, number])]);
 	paths.push(Array.from({ length: 90 }, (_, i) => { const a = i / 89 * 2 * Math.PI * 1.5; return [70 + 12 * Math.cos(a) + i * 0.15, 25 + 12 * Math.sin(a)] as [number, number]; }));
