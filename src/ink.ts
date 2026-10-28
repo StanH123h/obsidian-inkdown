@@ -286,8 +286,8 @@ export function dequantize(pts: Pt[], h: number): Pt[] {
  *  roughly the span smoothed over, in samples: about 3.5. Kept light: the
  *  anchors already undo the long steps, this only takes out the wobble joining
  *  them leaves. Swept in test/ink.test.js: from 60 to 300 everything passes;
- *  at 600 and above a 横折's corner is rounded off beyond what the rounding
- *  itself allows. */
+ *  at 600 and above the corner of an across-and-down turn is rounded off
+ *  beyond what the rounding itself allows. */
 const TUBE_LAMBDA = 150;
 const TUBE_RHO = 2 * Math.sqrt(TUBE_LAMBDA);
 const TUBE_ROUNDS = 80;

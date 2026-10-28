@@ -72,14 +72,14 @@ const MODES = ['轮廓填充','盖圆(旧)','折线(最旧)'];
 const opt = { size:8, smooth:.55, thin:.70, mode:0, taper:0, speed:false };
 const TAPERS = ['起收笔锋：关','起收笔锋：轻微','起收笔锋：明显'];
 const TAPER_PX = [0, 3, 10];
-const strokes = [];      // 已完成笔迹：{ raw:[{x,y,p,t}] }
+const strokes = [];      // finished strokes: { raw:[{x,y,p,t}] }
 let cur = null;
 
-/* ================= 尺寸 / 坐标 ================= */
+/* ================= Size / coordinates ================= */
 function syncRect(){ rect = live.getBoundingClientRect(); }
 function resize(){
   syncRect();
-  // 用画布实际显示尺寸，不用 window.innerWidth/innerHeight（iOS 上前者含工具栏区域）
+  // The canvas's shown size, not window.innerWidth/innerHeight (on iOS those include the toolbar)
   for (const [cv,cx] of [[base,bctx],[live,lctx]]) {
     cv.width  = Math.round(rect.width  * dpr);
     cv.height = Math.round(rect.height * dpr);
@@ -91,14 +91,17 @@ function resize(){
 }
 const toPt = e => ({ x:e.clientX-rect.left, y:e.clientY-rect.top, p:e.pressure, t:e.timeStamp });
 
-/* ================= 从原始点算出带半径的笔迹 =================
-   每次渲染都从 raw 重算，所以拖动滑块能实时改变已画好的笔迹。      */
+/* ================= From raw points to a stroke with radii =================
+   Worked out again from raw on every render, so the sliders change strokes
+   already drawn, live. */
 function build(stroke){
   const raw = stroke.raw, out = [];
   const k = 1 - opt.smooth;
 
-  // 落笔/抬笔瞬间的压力是假的：数字化仪还没读出来，iPad 会报 0 或极小值。
-  // 那不是"你按得轻"，所以直接用第一个/最后一个可信采样回填，而不是拿假笔锋去遮。
+  // The pressure at the moment of touching down or lifting is not real: the
+  // digitiser has no reading yet, and the iPad reports 0 or next to it. That
+  // is not a light touch, so the first / last trusted sample is copied back
+  // over it, rather than hiding it under a made-up taper.
   let head = 0;
   while (head < raw.length && head < 6 && !(raw[head].p > 0.02)) head++;
   const pHead = head < raw.length ? raw[head].p : 0.25;
@@ -119,7 +122,7 @@ function build(stroke){
     const step = prev ? Math.hypot(pt.x-prev.x, pt.y-prev.y) : 0;
     dist += step;
     pt.d = dist;
-    pt.v = step / dt * 16;                       // px / 帧
+    pt.v = step / dt * 16;                       // px / frame
     out.push(pt); prev = pt;
   }
   const total = dist;
@@ -127,15 +130,16 @@ function build(stroke){
     let f = pt.p;
     if (opt.speed){
       const s = Math.min(pt.v/2.5, 1);
-      f = hasPressure ? f*(1-s*0.35) : 1-s*0.75; // 有压感就微调，没压感就全靠速度
+      f = hasPressure ? f*(1-s*0.35) : 1-s*0.75; // with pressure, a nudge; without, speed is all there is
     }
     let r = opt.size/2 * (1 - opt.thin*(1-f));
     const TP = TAPER_PX[opt.taper];
     if (TP && total > 0){
-      // 关键：笔锋长度最多只占整笔的 15%，否则短笔画（汉字的点、横）会被两头吃成米粒
+      // The point: a taper takes at most 15% of the stroke, or short strokes (a dot
+      // or a short dash in a Chinese character) get eaten from both ends to a grain of rice
       const T = Math.min(TP, total*0.15) || 1;
-      r *= ease(Math.min(pt.d/T, 1));                                   // 起笔
-      if (stroke.done) r *= ease(Math.min((total-pt.d)/T, 1));          // 收笔
+      r *= ease(Math.min(pt.d/T, 1));                                   // start of the stroke
+      if (stroke.done) r *= ease(Math.min((total-pt.d)/T, 1));          // end of the stroke
     }
     pt.r = Math.max(r, 0.2);
   }
@@ -143,17 +147,17 @@ function build(stroke){
 }
 const ease = t => t*t*(3-2*t);   // smoothstep
 
-/* ================= 渲染 ================= */
+/* ================= Rendering ================= */
 function drawStroke(cx, pts){
   if (!pts.length) return;
-  if (opt.mode === 2) {                                   // 折线：最原始
+  if (opt.mode === 2) {                                   // polyline: the most basic
     for (let i=1;i<pts.length;i++){
       cx.lineWidth = pts[i].r*2;
       cx.beginPath(); cx.moveTo(pts[i-1].x,pts[i-1].y); cx.lineTo(pts[i].x,pts[i].y); cx.stroke();
     }
     return;
   }
-  if (opt.mode === 1) {                                   // 盖圆：平滑但边缘会毛
+  if (opt.mode === 1) {                                   // stamped circles: smooth, but the edges go fuzzy
     for (let i=0;i<pts.length;i++){
       const a=pts[i], b=pts[i+1]; 
       cx.beginPath(); cx.arc(a.x,a.y,a.r,0,TAU); cx.fill();
@@ -164,8 +168,8 @@ function drawStroke(cx, pts){
     }
     return;
   }
-  /* ---- 轮廓填充：整条笔迹算成一个闭合路径，只 fill 一次 ----
-     这样边缘只做一次抗锯齿，不会因为几百次 alpha 叠加而发毛。 */
+  /* ---- Outline fill: the whole stroke as one closed path, filled once ----
+     so the edge is antialiased once, not fuzzed by hundreds of alpha layers. */
   if (pts.length === 1){
     cx.beginPath(); cx.arc(pts[0].x,pts[0].y,pts[0].r,0,TAU); cx.fill(); return;
   }
@@ -174,7 +178,7 @@ function drawStroke(cx, pts){
     const a = pts[i-1] || pts[i], b = pts[i+1] || pts[i];
     let dx=b.x-a.x, dy=b.y-a.y;
     const len = Math.hypot(dx,dy) || 1;
-    const nx=-dy/len, ny=dx/len;                          // 法线
+    const nx=-dy/len, ny=dx/len;                          // normal
     L.push({ x:pts[i].x+nx*pts[i].r, y:pts[i].y+ny*pts[i].r });
     R.push({ x:pts[i].x-nx*pts[i].r, y:pts[i].y-ny*pts[i].r });
   }
@@ -183,16 +187,16 @@ function drawStroke(cx, pts){
   cx.beginPath();
   cx.moveTo(L[0].x, L[0].y);
   quadThrough(cx, L);
-  cx.arc(last.x, last.y, last.r,                          // 收笔圆头
+  cx.arc(last.x, last.y, last.r,                          // round cap at the end
          ang(last, L[L.length-1]), ang(last, R[R.length-1]), true);
   quadThrough(cx, Rr);
-  cx.arc(first.x, first.y, first.r,                       // 起笔圆头
+  cx.arc(first.x, first.y, first.r,                       // round cap at the start
          ang(first, Rr[Rr.length-1]), ang(first, L[0]), true);
   cx.closePath();
   cx.fill();
 }
 const ang = (c,p) => Math.atan2(p.y-c.y, p.x-c.x);
-function quadThrough(cx, p){                              // 过中点的二次贝塞尔，边界平滑
+function quadThrough(cx, p){                              // quadratic Béziers through the midpoints: a smooth edge
   for (let i=1;i<p.length-1;i++)
     cx.quadraticCurveTo(p[i].x, p[i].y, (p[i].x+p[i+1].x)/2, (p[i].y+p[i+1].y)/2);
   if (p.length>1) cx.lineTo(p[p.length-1].x, p[p.length-1].y);
@@ -209,14 +213,14 @@ function redrawAll(){
   if (cur) drawStroke(lctx, build(cur));
 }
 
-/* ================= 事件 ================= */
+/* ================= Events ================= */
 let drawing=false, pending=false, pressures=[], stamps=[];
 const dot=$('dot');
 function frame(){ pending=false; redrawLive(); }
 function schedule(){ if(!pending){ pending=true; requestAnimationFrame(frame); } }
 
 live.addEventListener('pointerdown', e => {
-  if (e.pointerType === 'touch') return;                  // 手掌拒识
+  if (e.pointerType === 'touch') return;                  // palm rejection
   syncRect(); drawing=true;
   cur = { raw:[toPt(e)], done:false };
   live.setPointerCapture(e.pointerId);
@@ -231,7 +235,7 @@ live.addEventListener('pointermove', e => {
 function end(){
   if (!drawing) return;
   drawing=false; cur.done=true;
-  drawStroke(bctx, build(cur));                           // 定稿画到底层
+  drawStroke(bctx, build(cur));                           // finished: drawn onto the base layer
   lctx.clearRect(0,0,rect.width,rect.height);
   strokes.push(cur); cur=null; dot.style.opacity=0;
 }
@@ -261,7 +265,7 @@ function report(e,n){
   } else { const v=$('verdict'); v.className='bad'; v.textContent='⚠️ pointerType = "'+e.pointerType+'"'; }
 }
 
-/* ================= 控件 ================= */
+/* ================= Controls ================= */
 const bind=(id,key,fmt,scale=1)=>{ const el=$(id),out=$(id+'V');
   el.addEventListener('input',()=>{ opt[key]=el.value*scale; out.textContent=fmt(opt[key]); redrawAll(); }); };
 bind('size','size', v=>v);

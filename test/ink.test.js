@@ -89,16 +89,17 @@ const f = check('fast sparse curve', fast);
 ok(f.after < f.before / 3, `on a fast curve the spline's corners are under a third of the straight ones (${f.before.toFixed(3)} -> ${f.after.toFixed(3)})`);
 ok(f.after * MAX_ZOOM_PX < 0.5, `on a fast curve no corner shows even at max zoom: ${(f.after * MAX_ZOOM_PX).toFixed(2)} px`);
 
-// 横折: across, slowing into the corner so samples bunch up, then down. The
-// corner must stay a corner: the spline may not bulge past it.
+// An across-and-down turn, as in many Chinese characters: across, slowing
+// into the corner so samples bunch up, then down. The corner must stay a
+// corner: the spline may not bulge past it.
 const across = Array.from({ length: 40 }, (_, i) => [200 + 40 * (1 - Math.pow(1 - i / 39, 2)), 300]);
 const down = Array.from({ length: 40 }, (_, i) => [240, 300 + 40 * Math.pow(i / 39, 2)]);
 const corner = noisy([...across, ...down], 0.12);
-check('横折 corner', corner);
+check('across-and-down corner', corner);
 const cv = build({ c: '#000', s: 8, pts: corner }, opt(1));
 const maxX = Math.max(...cv.map((p) => p.x)), minY = Math.min(...cv.map((p) => p.y));
 const lv = build({ c: '#000', s: 8, pts: corner }, opt(0));
-ok(maxX <= Math.max(...lv.map((p) => p.x)) + 0.2 && minY >= Math.min(...lv.map((p) => p.y)) - 0.2, `横折: no overshoot past the corner (x ${maxX.toFixed(2)}, y ${minY.toFixed(2)})`);
+ok(maxX <= Math.max(...lv.map((p) => p.x)) + 0.2 && minY >= Math.min(...lv.map((p) => p.y)) - 0.2, `across-and-down turn: no overshoot past the corner (x ${maxX.toFixed(2)}, y ${minY.toFixed(2)})`);
 
 // Coincident and near-coincident samples must not produce NaN
 const dup = [{ x: 10, y: 10, p: 0.5 }, { x: 10, y: 10, p: 0.5 }, { x: 10.0001, y: 10, p: 0.5 }, { x: 14, y: 12, p: 0.5 }, { x: 14, y: 12, p: 0.5 }, { x: 20, y: 15, p: 0.5 }];
@@ -144,11 +145,11 @@ stairs('slanted line', Array.from({ length: 120 }, (_, i) => [700 - 40 * i / 119
 // A circle the size of a small letter
 const ring = Array.from({ length: 140 }, (_, i) => [300 + 25 * Math.cos(i / 139 * 2 * Math.PI), 300 + 25 * Math.sin(i / 139 * 2 * Math.PI)]);
 stairs('letter-sized circle', ring);
-// 横折, with the slight slant a real hand gives it
+// An across-and-down turn, with the slight slant a real hand gives it
 const hz = [...Array.from({ length: 60 }, (_, i) => [200 + 60 * i / 59, 400 + 2 * i / 59]), ...Array.from({ length: 60 }, (_, i) => [260 - 1.5 * i / 59, 402 + 60 * i / 59])];
-const c2 = stairs('横折', hz);
+const c2 = stairs('across-and-down turn', hz);
 const cornerGap = Math.min(...c2.fixed.map((p) => Math.hypot(p.x - 260, p.y - 402)));
-ok(cornerGap <= INHERENT, `横折: the corner stays a corner, within ${(cornerGap * SCALE).toFixed(2)} px of the true one`);
+ok(cornerGap <= INHERENT, `across-and-down turn: the corner stays a corner, within ${(cornerGap * SCALE).toFixed(2)} px of the true one`);
 // Precise input is left exactly as it was
 const exact = [{ x: 1.3, y: 2.7, p: 0.5 }, { x: 5.1, y: 3.3, p: 0.5 }, { x: 9.7, y: 4.9, p: 0.5 }, { x: 14.2, y: 7.1, p: 0.5 }];
 eq(build({ c: '#000', s: 8, pts: exact, q: 0 }, opt(0)).length, build({ c: '#000', s: 8, pts: exact }, opt(0)).length, 'q = 0 changes nothing');
