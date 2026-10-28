@@ -23,8 +23,11 @@ const PORT = 9333 + Math.floor(Math.random() * 500);
 let bad = 0, n = 0;
 let last = "starting";
 const ok = (cond, msg) => { n++; last = msg.split("\n")[0]; if (!cond) { bad++; console.log("FAIL " + msg); } };
-// A run that hangs says where, instead of sitting there
-setTimeout(() => { console.log(`HUNG after: ${last}`); quit(2); }, 150000).unref();
+// A run that hangs says where, instead of sitting there. Hanging is a step
+// that does not finish, not a slow run: on a busy machine the whole run can
+// take minutes.
+let lastAt = Date.now();
+setInterval(() => { if (Date.now() - lastAt > 60000) { console.log(`HUNG after: ${last}`); quit(2); } }, 2000).unref();
 
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), "hw-pad-"));
 const chrome = spawn(CHROME, [
@@ -68,7 +71,9 @@ const send = (method, params = {}) => new Promise((resolve, reject) => {
 });
 const js = async (expr) => {
 	last = "js: " + expr.replace(/\s+/g, " ").slice(0, 80);
+	lastAt = Date.now();
 	const r = await send("Runtime.evaluate", { expression: expr, returnByValue: true, awaitPromise: true });
+	lastAt = Date.now();
 	if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
 	return r.result.value;
 };
@@ -739,6 +744,19 @@ try {
 	await pen(line(100, 500, 300, 500));
 	s = await state();
 	ok(s.strokes === 3, "the pen writes in the pane");
+	// The note's name keeps across the pane from the tool bar
+	const label = () => js(`(() => { const l = document.getElementById("pane-target").getBoundingClientRect(), p = __pad.root.getBoundingClientRect();
+		const hit = [__pad.tools, __pad.ctxBar].filter((c) => c.isConnected).some((c) => { const r = c.getBoundingClientRect(); return l.left < r.right && l.right > r.left && l.top < r.bottom && l.bottom > r.top; });
+		return { top: l.top - p.top, foot: p.bottom - l.bottom, hit }; })()`);
+	let lb = await label();
+	ok(near(lb.top, 8) && !lb.hit, `the note's name sits at the top of the pane, clear of the cards: ${JSON.stringify(lb)}`);
+	await js("__pad.moveToolbar('top')");
+	lb = await label();
+	ok(near(lb.foot, 8) && !lb.hit, `with the tool bar at the top it goes to the foot, clear of it: ${JSON.stringify(lb)}`);
+	await js("__pad.moveToolbar('bottom')");
+	lb = await label();
+	ok(near(lb.top, 8) && !lb.hit, `with the tool bar at the foot, back to the top: ${JSON.stringify(lb)}`);
+	await js("__pad.moveToolbar('right')");
 	await js("resizePane(360, 820)");
 	await new Promise((r) => setTimeout(r, 300));
 	h = await host();

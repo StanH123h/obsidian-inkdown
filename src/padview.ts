@@ -1,5 +1,5 @@
 import { ItemView, Notice, Scope, WorkspaceLeaf } from "obsidian";
-import { InkPad } from "./pad";
+import { InkPad, ToolbarSide } from "./pad";
 import { PANE, S } from "./styles";
 import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
@@ -18,6 +18,8 @@ export class PadView extends ItemView {
 	private shortcuts: Scope;
 	private pad: InkPad | null = null;
 	private label: HTMLDivElement | null = null;
+	/** Where the pad's tool bar is, for the label to keep across from it */
+	private toolbarAt: ToolbarSide = "right";
 	private swapping = false;
 
 	constructor(leaf: WorkspaceLeaf, private plugin: HandwritingPlugin) {
@@ -47,8 +49,12 @@ export class PadView extends ItemView {
 				to: "full",
 				go: () => { this.swapping = true; this.leaf.detach(); },
 			},
+			toolbarAt: (side) => {
+				this.toolbarAt = side;
+				this.label?.setAttribute("style", S.target(side));
+			},
 		});
-		this.label = el.createDiv({ attr: { style: S.target } });
+		this.label = el.createDiv({ attr: { style: S.target(this.toolbarAt) } });
 		this.showTarget();
 	}
 
