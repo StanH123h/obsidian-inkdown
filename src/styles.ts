@@ -90,6 +90,20 @@ export const S = {
 		"background:var(--text-normal, #222);color:var(--background-primary, #fff);" +
 		"box-shadow:0 4px 14px rgba(0,0,0,.25);",
 	hintArrow: "position:absolute;bottom:-5px;width:10px;height:10px;transform:rotate(45deg);background:var(--text-normal, #222);",
+	// Fingertips tapping in the middle of the page, shown once for the two-
+	// and three-finger taps (see TAP_DOT). Placed by its centre; nothing in
+	// it takes a touch.
+	tapDemo: "position:absolute;z-index:24;width:0;height:0;pointer-events:none;",
+	tapDot:
+		"position:absolute;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;box-sizing:border-box;" +
+		`background:rgba(255,255,255,.6);border:2.5px solid ${ACCENT};box-shadow:0 3px 12px rgba(0,0,0,.22);opacity:0;`,
+	tapRing:
+		"position:absolute;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;box-sizing:border-box;" +
+		`border:2px solid ${ACCENT};opacity:0;`,
+	tapLabel:
+		"position:absolute;top:48px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;" +
+		"font-size:15px;line-height:1.3;font-weight:600;white-space:nowrap;opacity:0;" +
+		"background:var(--text-normal, #222);color:var(--background-primary, #fff);box-shadow:0 4px 14px rgba(0,0,0,.25);",
 
 	btn: BTN + `background:transparent;color:${MUTED};`,
 	btnOn: BTN + `background:${HOVER};color:${ACCENT};`,
@@ -271,6 +285,39 @@ export const ICONS = {
 		"M21.854 2.147l-10.94 10.939",
 	],
 };
+
+/* The fingertips' taps, over TAP_MS: in, two taps (pressed in, a ring
+ * spreading out), and away. Web animations rather than CSS keyframes, which
+ * would need a stylesheet (see the top of this file). */
+export const TAP_MS = 2600;
+export const TAP_DOT: Keyframe[] = [
+	{ offset: 0, opacity: 0, transform: "scale(.6)" },
+	{ offset: 0.08, opacity: 1, transform: "scale(1)" },
+	{ offset: 0.18, transform: "scale(1)" },
+	{ offset: 0.23, transform: "scale(.84)" },
+	{ offset: 0.29, transform: "scale(1)" },
+	{ offset: 0.41, transform: "scale(1)" },
+	{ offset: 0.46, transform: "scale(.84)" },
+	{ offset: 0.52, transform: "scale(1)" },
+	{ offset: 0.85, opacity: 1 },
+	{ offset: 1, opacity: 0, transform: "scale(1)" },
+];
+export const TAP_RING: Keyframe[] = [
+	{ offset: 0, opacity: 0, transform: "scale(1)" },
+	{ offset: 0.21, opacity: 0, transform: "scale(1)" },
+	{ offset: 0.23, opacity: 0.6, transform: "scale(1)" },
+	{ offset: 0.4, opacity: 0, transform: "scale(1.8)" },
+	{ offset: 0.44, opacity: 0, transform: "scale(1)" },
+	{ offset: 0.46, opacity: 0.6, transform: "scale(1)" },
+	{ offset: 0.63, opacity: 0, transform: "scale(1.8)" },
+	{ offset: 1, opacity: 0, transform: "scale(1)" },
+];
+export const TAP_LABEL: Keyframe[] = [
+	{ offset: 0, opacity: 0 },
+	{ offset: 0.1, opacity: 1 },
+	{ offset: 0.85, opacity: 1 },
+	{ offset: 1, opacity: 0 },
+];
 
 /** The width bar's size across the edge it floats by: its width beside a
  *  column, its height above a row. Its room is kept off the page even while

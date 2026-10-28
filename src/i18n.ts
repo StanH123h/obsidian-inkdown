@@ -29,6 +29,8 @@ const STR = {
 	"side.top": ["Top", "上"],
 	"side.bottom": ["Bottom", "下"],
 	"hint.drag": ["Hold to drag", "长按以拖拽"],
+	"hint.twoFingers": ["Two fingers to undo", "双指撤销"],
+	"hint.threeFingers": ["Three fingers to redo", "三指重做"],
 	"tool.close": ["Close (your writing is kept for next time)", "关闭（字迹会留到下次）"],
 	"tool.convert": ["Convert", "转换"],
 	"tool.convertHint": ["Turn this into Markdown at the cursor", "转成 Markdown，插到光标处"],

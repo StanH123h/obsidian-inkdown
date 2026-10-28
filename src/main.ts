@@ -51,6 +51,11 @@ export interface HandwritingSettings {
 	/** Whether the hint on moving the tool bar has done its job: shown until
 	 *  the tool bar has been moved, or the hint tapped */
 	toolbarHintSeen: boolean;
+	/** Whether the two-finger tap for undo, and the three-finger one for redo,
+	 *  have been shown: once each, on the first press of the button by hand.
+	 *  Not skipped for having used the tap, which a stray touch also does. */
+	undoTapShown: boolean;
+	redoTapShown: boolean;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -79,6 +84,8 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	padMode: "split",
 	toolbarSide: "right",
 	toolbarHintSeen: false,
+	undoTapShown: false,
+	redoTapShown: false,
 };
 
 export default class HandwritingPlugin extends Plugin {
@@ -472,6 +479,8 @@ export default class HandwritingPlugin extends Plugin {
 		if (s.padMode !== "full") s.padMode = "split";
 		if (!["left", "right", "top", "bottom"].includes(s.toolbarSide)) s.toolbarSide = "right";
 		if (typeof s.toolbarHintSeen !== "boolean") s.toolbarHintSeen = false;
+		if (typeof s.undoTapShown !== "boolean") s.undoTapShown = false;
+		if (typeof s.redoTapShown !== "boolean") s.redoTapShown = false;
 		const saved = Array.isArray(s.sizes) ? s.sizes : [];
 		s.sizes = DEFAULT_SETTINGS.sizes.map((d, i) => {
 			const v = Number(saved[i]);

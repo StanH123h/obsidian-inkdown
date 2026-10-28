@@ -520,6 +520,44 @@ try {
 	ok(s.strokes === 3 && s.notices.includes("Nothing to redo"), `redoing then says there is nothing to redo: ${JSON.stringify(s.notices)}`);
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- showing the finger taps, once each ---- */
+	await js("settings.undoTapShown = false; settings.redoTapShown = false");
+	await js("openPad([])");
+	await frame();
+	for (const y of [300, 360, 420]) await pen(line(150, y, 400, y));
+	const demo = () => js(`(() => { const d = __pad.tapDemo; if (!d || !d.isConnected) return null; const r = d.getBoundingClientRect(), t = __pad.tools.getBoundingClientRect(), w = __pad.ctxBar.isConnected ? __pad.ctxBar.getBoundingClientRect() : t;
+		return { parts: d.querySelectorAll(":scope > div").length, text: d.textContent, clear: r.left + 110 < Math.min(t.left, w.left) && r.left > 110 }; })()`);
+	const shown = () => js("[settings.undoTapShown, settings.redoTapShown].join()");
+	await button("Undo");
+	ok(!(await demo()) && await shown() === "false,false" && (await look()).strokes === 2, "undone with a mouse: it undoes, and no fingers are shown, nor marked as shown");
+	// A stray two-finger tap first: it says nothing of whether the tap is known
+	await tapWith([[300, 700], [420, 700]]);
+	ok(await shown() === "false,false" && (await look()).strokes === 1, "the tap used, perhaps by accident: not taken as known");
+	await button("Redo");
+	await tapAt(...(await where("Undo")));
+	let dm = await demo();
+	ok((await look()).strokes === 1 && dm && dm.parts === 5 && dm.text === "Two fingers to undo" && dm.clear, `so undo by hand, the first time, still shows two fingertips tapping, clear of the cards: ${JSON.stringify(dm)}`);
+	ok(await shown() === "true,false", "and it is marked as shown");
+	await wait(2800);
+	ok(!(await demo()), "it is gone by itself");
+	await tapAt(...(await where("Undo")));
+	ok(!(await demo()) && (await look()).strokes === 0, "the next undo by hand shows nothing");
+	await tapWith([[300, 700], [420, 700], [540, 700]]);
+	ok(await shown() === "true,false", "three fingers used: redo still to show");
+	await tapAt(...(await where("Redo")));
+	dm = await demo();
+	ok(dm && dm.parts === 7 && dm.text === "Three fingers to redo" && await shown() === "true,true", `the redo button by hand shows three fingertips, once: ${JSON.stringify(dm)}`);
+	await wait(2800);
+	await tapAt(...(await where("Undo")));
+	await tapAt(...(await where("Redo")));
+	ok(!(await demo()), "after that, neither button shows anything");
+	// Writing with a finger turns the taps off: nothing to show
+	await js("settings.undoTapShown = false; settings.allowFinger = true");
+	await tapAt(...(await where("Undo")));
+	ok(!(await demo()) && await shown() === "false,true", "with finger writing on, the taps are off and not shown");
+	await js("settings.allowFinger = false; settings.undoTapShown = true; settings.redoTapShown = true");
+	await button("Close (your writing is kept for next time)");
+
 	/* ---- closed and opened again: the same pad ---- */
 	await js("openPad([])");
 	await frame();
