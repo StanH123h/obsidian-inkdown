@@ -661,6 +661,52 @@ try {
 		await button("Pen");
 		await button("Close (your writing is kept for next time)");
 	}
+	// Tapping the pen in hand puts its widths away, and brings them back (#20).
+	// Taking up a pen, from another tool or by opening the pad, brings them out.
+	await viewport(820, 1180);
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	const widthsOut = async () => (await layout()).widths !== null;
+	const v20 = await layout();
+	ok(await widthsOut(), "a pen in hand shows its widths");
+	await button("Pen");
+	const v21 = await layout();
+	ok(!(await widthsOut()) && v21.zoom === v20.zoom && v21.panX === v20.panX && v21.panY === v20.panY, "tapping the pen in hand puts them away, and the page stays put");
+	await button("Pen");
+	ok(await widthsOut(), "tapping it again brings them back");
+	await button("Pen");
+	await button("AI pen: notes for the AI, never transcribed");
+	ok(await widthsOut(), "put away, then the AI pen taken up: out again");
+	await button("AI pen: notes for the AI, never transcribed");
+	ok(!(await widthsOut()), "the AI pen in hand, tapped: away");
+	await button("Lasso: circle ink to move it");
+	await button("Pen");
+	ok(await widthsOut(), "away, the lasso, then the pen: out again");
+	await button("Pen");
+	const dialAt = await js("(() => { const r = __pad.dial.el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+	await click(...dialAt);
+	ok((await state()).tool === "eraser" && !(await widthsOut()), "the eraser from the dial: no widths");
+	await click(...dialAt);
+	ok((await state()).tool === "pen" && await widthsOut(), "back to the pen from the dial: out again");
+	await button("Pen");
+	await button("Close (your writing is kept for next time)");
+	await js("reopenPad()");
+	await new Promise((r) => setTimeout(r, 300));
+	ok(await widthsOut(), "away when the pad closed, out when it opens again");
+	await tapAt(...(await where("Pen")));
+	ok(!(await widthsOut()), "a finger's tap on the pen in hand puts them away too");
+	await tapAt(...(await where("Pen")));
+	// In a row along the foot: away and back, and centred over it when back
+	await js("__pad.moveToolbar('bottom')");
+	await frame();
+	await button("Pen");
+	ok(!(await widthsOut()), "with the toolbar at the foot, the pen tapped: away");
+	await button("Pen");
+	const back = await layout();
+	ok(back.widths && near(back.widths.l + back.widths.w / 2, back.tools.l + back.tools.w / 2) && near(back.widths.b, back.tools.t - 8), `and back, centred over the row: ${JSON.stringify(back.widths)}`);
+	await js("__pad.moveToolbar('right')");
+	await button("Close (your writing is kept for next time)");
+
 	// The dial can be left on a card, as anywhere else: it stays where it is
 	// put, over the card, so its middle can still be taken to drag it off
 	await viewport(820, 1180);
