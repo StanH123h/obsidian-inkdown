@@ -161,13 +161,19 @@ export class InkPad {
 	private tool: Tool = "pen";
 	/** Which pen the dial goes back to when the eraser is put down */
 	private lastPen: "pen" | "ai" = "pen";
-	/** Which of the three width slots is active. The widths themselves live in
-	 *  settings, so they survive a restart and follow the vault across devices. */
-	private sizeIdx = 1;
 	/** Whether the pen's width card is out. Out each time a pen is taken up;
 	 *  tapping the pen already in hand puts it away, and brings it back. */
 	private widthsOpen = true;
-	private get sizes() { return this.plugin.settings.sizes; }
+	/** The pen in hand's three widths, and which of them is in use. Each pen
+	 *  has its own, kept in settings with the one last used, so they survive
+	 *  a restart and follow the vault across devices. */
+	private get sizes() { const s = this.plugin.settings; return this.lastPen === "ai" ? s.aiSizes : s.sizes; }
+	private get sizeIdx() { const s = this.plugin.settings; return this.lastPen === "ai" ? s.aiSizeIdx : s.sizeIdx; }
+	private set sizeIdx(i: number) {
+		const s = this.plugin.settings;
+		if (this.lastPen === "ai") s.aiSizeIdx = i; else s.sizeIdx = i;
+		void this.plugin.saveSettings();
+	}
 	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
 	private undoStack: UndoEntry[] = [];
 	private redoStack: UndoEntry[] = [];
@@ -378,11 +384,10 @@ export class InkPad {
 	get strokeCount() { return this.strokes.length; }
 
 	/** Opening a parked pad again: the page, history and view come back, but
-	 *  it starts with the pen in hand, the middle width, nothing selected, as
-	 *  a new pad does. Call before mounting. */
+	 *  it starts with the pen in hand, nothing selected, as a new pad does.
+	 *  Each pen keeps its width. Call before mounting. */
 	takeUpPen() {
 		this.tool = this.lastPen = "pen";
-		this.sizeIdx = 1;
 		this.widthsOpen = true;
 		this.eraserAt = null;
 		this.lasso = null;

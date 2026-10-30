@@ -707,6 +707,48 @@ try {
 	await js("__pad.moveToolbar('right')");
 	await button("Close (your writing is kept for next time)");
 
+	// Each pen keeps its own three widths and the one in use, across pens,
+	// closing and opening, and in settings
+	await js("settings.sizes = [4, 8, 14]; settings.aiSizes = [4, 8, 14]; settings.sizeIdx = 1; settings.aiSizeIdx = 1");
+	await js("openPad([])");
+	await new Promise((r) => setTimeout(r, 300));
+	let wy = 300;
+	const writeOne = async () => { await pen(line(150, wy, 400, wy)); wy += 40; return js("(() => { const st = __pad.strokes.at(-1); return { s: st.s, ai: !!st.ai }; })()"); };
+	ok((await writeOne()).s === 8, "the pen writes at its middle width to begin with");
+	await button("Pen width 14");
+	ok((await writeOne()).s === 14, "the pen's widest picked: it writes at 14");
+	await button("AI pen: notes for the AI, never transcribed");
+	let w = await writeOne();
+	ok(w.ai && w.s === 8, `the AI pen has its own widths, still at its middle one: ${JSON.stringify(w)}`);
+	await button("Pen width 4");
+	w = await writeOne();
+	ok(w.ai && w.s === 4, "its narrowest picked: it writes at 4");
+	await button("Pen");
+	ok((await writeOne()).s === 14, "back to the pen: still at its 14");
+	ok(await js("[settings.sizeIdx, settings.aiSizeIdx].join()") === "2,0", "the width in use is kept in settings, for each pen");
+	// The slider changes the pen's width in use, not the AI pen's
+	const slider = await js(`(() => { const e = __pad.ctxBar.querySelector('div[style*="touch-action:none;cursor:pointer"]'), r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + 4, r.top + r.height - 4]; })()`);
+	await drag([slider[0], slider[1]], [slider[0], slider[2]]);
+	await drag([slider[0], slider[2]], [slider[0], slider[2] - 30]);
+	const widths = await js("({ pen: settings.sizes.slice(), ai: settings.aiSizes.slice() })");
+	ok(widths.pen[2] !== 14 && widths.pen.slice(0, 2).join() === "4,8" && widths.ai.join() === "4,8,14", `the slider changes the pen's width in use, and leaves the AI pen's: ${JSON.stringify(widths)}`);
+	const penNow = widths.pen[2];
+	await button("AI pen: notes for the AI, never transcribed");
+	await button("Pen width 14");
+	w = await writeOne();
+	ok(w.s === 14, `the AI pen's widest is still its own 14, not the pen's new ${penNow}: wrote at ${w.s}`);
+	await button("Pen width 4");
+	await button("Pen");
+	await button("Close (your writing is kept for next time)");
+	await js("reopenPad()");
+	await new Promise((r) => setTimeout(r, 300));
+	ok((await writeOne()).s === penNow, `opened again, the pen is at the width it was left at, ${penNow}, not the middle`);
+	await button("AI pen: notes for the AI, never transcribed");
+	ok((await writeOne()).s === 4, "and the AI pen at its 4");
+	await button("Pen");
+	await js("settings.sizes = [4, 8, 14]; settings.aiSizes = [4, 8, 14]; settings.sizeIdx = 1; settings.aiSizeIdx = 1");
+	await button("Close (your writing is kept for next time)");
+
 	// The dial can be left on a card, as anywhere else: it stays where it is
 	// put, over the card, so its middle can still be taken to drag it off
 	await viewport(820, 1180);
