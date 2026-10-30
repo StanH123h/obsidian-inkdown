@@ -28,7 +28,10 @@ export interface HandwritingSettings {
 	redrawFigures: boolean;
 	/** Point out what looks wrong, in a callout after the transcription */
 	checkWork: boolean;
-	sizes: number[];     // the three pen widths on the toolbar, in page units
+	sizes: number[];     // the pen's three widths on the toolbar, in page units
+	aiSizes: number[];   // the AI pen's three, apart from the pen's
+	sizeIdx: number;     // which of the pen's widths is in use, 0..2
+	aiSizeIdx: number;   // which of the AI pen's
 	eraserMode: string;  // "stroke" removes a whole stroke, "precise" only what it touches
 	eraserSize: number;  // eraser radius in page units
 	smooth: number;      // input streamlining, 0..0.9
@@ -69,6 +72,9 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	redrawFigures: true,
 	checkWork: true,
 	sizes: [4, 8, 14],
+	aiSizes: [4, 8, 14],
+	sizeIdx: 1,
+	aiSizeIdx: 1,
 	eraserMode: "stroke",
 	eraserSize: 14,
 	smooth: 0.85,
@@ -481,11 +487,18 @@ export default class HandwritingPlugin extends Plugin {
 		if (typeof s.toolbarHintSeen !== "boolean") s.toolbarHintSeen = false;
 		if (typeof s.undoTapShown !== "boolean") s.undoTapShown = false;
 		if (typeof s.redoTapShown !== "boolean") s.redoTapShown = false;
-		const saved = Array.isArray(s.sizes) ? s.sizes : [];
-		s.sizes = DEFAULT_SETTINGS.sizes.map((d, i) => {
-			const v = Number(saved[i]);
-			return Number.isFinite(v) && v >= 1 && v <= 28 ? v : d;
-		});
+		const widths = (saved: unknown, fallback: number[]) => {
+			const a = Array.isArray(saved) ? saved : [];
+			return fallback.map((d, i) => {
+				const v = Number(a[i]);
+				return Number.isFinite(v) && v >= 1 && v <= 28 ? v : d;
+			});
+		};
+		s.sizes = widths(s.sizes, DEFAULT_SETTINGS.sizes);
+		// The AI pen shared the pen's widths before it had its own: it starts
+		// from them, and goes its own way from there
+		s.aiSizes = widths(stored?.aiSizes, s.sizes);
+		for (const k of ["sizeIdx", "aiSizeIdx"] as const) if (![0, 1, 2].includes(s[k])) s[k] = 1;
 		if (s.provider !== "openai") s.provider = "anthropic";
 		if (s.curve !== 0) s.curve = 1;
 		if (!CLAUDE_MODELS.some((m) => m.id === s.anthropicModel)) s.anthropicModel = DEFAULT_SETTINGS.anthropicModel;
