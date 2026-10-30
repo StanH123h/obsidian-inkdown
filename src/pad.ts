@@ -873,7 +873,6 @@ export class InkPad {
 			bar.setAttribute("style", this.across ? S.ctxBarRow : S.ctxBar);
 			this.root.insertBefore(bar, this.tools);
 		}
-		this.placeCards();
 		const vert = !this.across;
 
 		const dots: HTMLElement[] = [];
@@ -901,6 +900,9 @@ export class InkPad {
 		};
 		this.syncCtx = sync;
 		sync();
+		// Placed once filled: a row is as wide as what is in it, and placed
+		// empty it was centred as a sliver, then grew off to one side (#18)
+		this.placeCards();
 	}
 
 	/** A slider we draw ourselves.
