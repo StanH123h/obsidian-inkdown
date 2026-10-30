@@ -760,6 +760,12 @@ try {
 	await button("Bottom");
 	M = await layout();
 	ok(await js("settings.toolbarSide") === "bottom" && near(M.tools.b, 1180 - 12) && near(M.widths.b, M.tools.t - 8), `picked from the menu, it goes to the foot: ${JSON.stringify(M.tools)}`);
+	// Changing pen rebuilds the widths: they stay centred over the row (#18)
+	for (const pen of ["AI pen: notes for the AI, never transcribed", "Pen"]) {
+		await button(pen);
+		M = await layout();
+		ok(near(M.widths.l + M.widths.w / 2, M.tools.l + M.tools.w / 2) && M.widths.r <= M.root.r && near(M.widths.b, M.tools.t - 8), `after picking "${pen.split(":")[0]}", the widths are still centred over the row: widths ${M.widths.l.toFixed(0)}–${M.widths.r.toFixed(0)}, row ${M.tools.l.toFixed(0)}–${M.tools.r.toFixed(0)}`);
+	}
 	// Opened again, the page is laid out clear of it
 	await button("Close (your writing is kept for next time)");
 	await js("reopenPad()");
@@ -861,6 +867,15 @@ try {
 	await js("__pad.moveToolbar('bottom')");
 	lb = await label();
 	ok(near(lb.top, 8) && !lb.hit, `with the tool bar at the foot, back to the top: ${JSON.stringify(lb)}`);
+	// The screenshot in #18: a pen picked in the pane, the widths over the row.
+	// Picked once the move has settled, as by hand: the move's own resize,
+	// arriving a frame late, would otherwise place the cards again and hide it
+	await frame();
+	await button("AI pen: notes for the AI, never transcribed");
+	const inPane = await js(`(() => { const p = __pad.root.getBoundingClientRect(), c = __pad.ctxBar.getBoundingClientRect(), t = __pad.tools.getBoundingClientRect();
+		return { past: Math.round(c.right - p.right), off: Math.round((c.left + c.right) / 2 - (t.left + t.right) / 2) }; })()`);
+	ok(inPane.past <= 0 && Math.abs(inPane.off) <= 1, `in the pane, after picking a pen, the widths stay over the row and inside the pane: ${JSON.stringify(inPane)}`);
+	await button("Pen");
 	await js("__pad.moveToolbar('right')");
 	await js("resizePane(360, 820)");
 	await new Promise((r) => setTimeout(r, 300));
