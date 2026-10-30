@@ -249,6 +249,8 @@ export class InkPad {
 	private toolbarPointer = "";
 	/** The fingertips showing a tap, while they do */
 	private tapDemo: HTMLElement | null = null;
+	/** The two pens' buttons, for showing a tap on the one in hand */
+	private penBtns: { pen: HTMLElement; ai: HTMLElement } | null = null;
 	/** The open "⋯" menu, and the scrim under it */
 	private menu: HTMLElement | null = null;
 	private scrim: HTMLElement | null = null;
@@ -490,9 +492,11 @@ export class InkPad {
 	 *  width card away or brings it back. The page keeps the card's room
 	 *  either way, so it does not move. (#20) */
 	private pickPen(pen: "pen" | "ai") {
-		if (this.tool !== pen) { this.setTool(pen); return; }
+		if (this.tool !== pen) { this.setTool(pen); this.showPenTap(); return; }
 		this.widthsOpen = !this.widthsOpen;
 		this.buildContextBar();
+		// Found by hand: nothing left to show
+		this.markPenTapShown();
 	}
 
 	private buildToolbar() {
@@ -526,6 +530,7 @@ export class InkPad {
 		sep();
 		const penBtn = btn("pen", t("tool.pen"), () => this.pickPen("pen"));
 		const aiBtn = btn("pen", t("tool.aiPen"), () => this.pickPen("ai"));
+		this.penBtns = { pen: penBtn, ai: aiBtn };
 		aiBtn.createDiv({ text: "AI", attr: { style: S.btnBadge + `color:${NOTE_INK};` } });
 		const lasBtn = btn("lasso", t("tool.lasso"), () => this.setTool("lasso"));
 		sep();
@@ -848,6 +853,52 @@ export class InkPad {
 			demo.remove();
 			if (this.tapDemo === demo) this.tapDemo = null;
 		}, TAP_MS);
+	}
+
+	/** Once, on taking up a pen by its button, when the eye is on the toolbar
+	 *  (not on opening the pad, when it may be anywhere): a fingertip taps the
+	 *  pen's button, over "Tap again to hide" beside the cards. Not once the
+	 *  tap has been found by hand, nor while the hint on moving the toolbar is
+	 *  up, one hint at a time: then it waits for the next pen taken up. Gone
+	 *  by itself in TAP_MS, taking no touch. */
+	private showPenTap() {
+		const btn = this.penBtns?.[this.tool === "ai" ? "ai" : "pen"];
+		if (this.plugin.settings.penTapShown || this.hint || !btn?.isConnected || !this.ctxBar.isConnected) return;
+		this.markPenTapShown();
+		this.tapDemo?.remove();
+		const R = this.root.getBoundingClientRect(), b = btn.getBoundingClientRect();
+		const x = b.left - R.left + b.width / 2, y = b.top - R.top + b.height / 2;
+		const demo = this.tapDemo = this.root.createDiv({ attr: { style: S.tapDemo + "left:0;top:0;" } });
+		const timing = { duration: TAP_MS, fill: "forwards" as const };
+		const on = `left:${x}px;top:${y}px;`;
+		demo.createDiv({ attr: { style: S.tapRing + on } }).animate(TAP_RING, timing);
+		demo.createDiv({ attr: { style: S.tapDot + on } }).animate(TAP_DOT, timing);
+		// Beside both cards, toward the page, level with the button
+		const label = demo.createDiv({ text: t("hint.tapPen"), attr: { style: S.penTapLabel } });
+		const cards = [this.tools, this.ctxBar].map((c) => c.getBoundingClientRect());
+		const l = Math.min(...cards.map((c) => c.left)) - R.left, r = Math.max(...cards.map((c) => c.right)) - R.left;
+		const t0 = Math.min(...cards.map((c) => c.top)) - R.top, b0 = Math.max(...cards.map((c) => c.bottom)) - R.top;
+		const w = label.offsetWidth, h = label.offsetHeight, gap = 12, side = this.side;
+		let lx: number, ly: number;
+		if (side === "right") { lx = l - gap - w; ly = y - h / 2; }
+		else if (side === "left") { lx = r + gap; ly = y - h / 2; }
+		else if (side === "bottom") { lx = x - w / 2; ly = t0 - gap - h; }
+		else { lx = x - w / 2; ly = b0 + gap; }
+		lx = Math.max(8, Math.min(lx, R.width - w - 8));
+		ly = Math.max(8, Math.min(ly, R.height - h - 8));
+		label.setCssProps({ left: lx + "px", top: ly + "px" });
+		label.animate(TAP_LABEL, timing);
+		window.setTimeout(() => {
+			demo.remove();
+			if (this.tapDemo === demo) this.tapDemo = null;
+		}, TAP_MS);
+	}
+
+	private markPenTapShown() {
+		const s = this.plugin.settings;
+		if (s.penTapShown) return;
+		s.penTapShown = true;
+		void this.plugin.saveSettings();
 	}
 
 	/** Over a column, its arrow at the grip, where there is room; otherwise

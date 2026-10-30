@@ -558,6 +558,91 @@ try {
 	await js("settings.allowFinger = false; settings.undoTapShown = true; settings.redoTapShown = true");
 	await button("Close (your writing is kept for next time)");
 
+	/* ---- showing the tap that puts the widths away, once ---- */
+	const penTap = (which = "Pen") => js(`(() => { const d = __pad.tapDemo; if (!d || !d.isConnected) return null;
+		const kids = d.querySelectorAll(":scope > div"); if (kids.length !== 3) return { kids: kids.length };
+		const dot = kids[1].getBoundingClientRect(), label = kids[2].getBoundingClientRect(), root = __pad.root.getBoundingClientRect();
+		const b = [...__pad.tools.querySelectorAll("button")].find((e) => e.getAttribute("aria-label").startsWith(${JSON.stringify(which)})).getBoundingClientRect();
+		const cx = (dot.left + dot.right) / 2, cy = (dot.top + dot.bottom) / 2;
+		const hits = [__pad.tools, __pad.ctxBar].some((c) => { const r = c.getBoundingClientRect(); return label.left < r.right && label.right > r.left && label.top < r.bottom && label.bottom > r.top; });
+		return { text: kids[2].textContent, onButton: cx > b.left && cx < b.right && cy > b.top && cy < b.bottom, labelClear: !hits && label.left >= root.left && label.right <= root.right && label.top >= root.top && label.bottom <= root.bottom, above: label.bottom <= Math.min(__pad.tools.getBoundingClientRect().top, __pad.ctxBar.getBoundingClientRect().top) }; })()`);
+	const fresh = async () => { await js("settings.penTapShown = false"); };
+	const opened = async () => { await js("openPad([])"); await new Promise((r) => setTimeout(r, 300)); };
+	const close = () => button("Close (your writing is kept for next time)");
+	// Opening the pad is not the moment: the eye may be anywhere
+	await js("settings.toolbarHintSeen = true");
+	await fresh();
+	await opened();
+	ok(!(await penTap()) && await js("settings.penTapShown") === false, "opening the pad with the pen in hand shows nothing");
+	// The pen in hand tapped: found by hand, nothing left to show
+	await button("Pen");
+	ok(!(await penTap()) && await js("settings.penTapShown") === true, "the pen in hand tapped: it does what it does, and counts as found");
+	await button("Pen");
+	await button("AI pen: notes for the AI, never transcribed");
+	ok(!(await penTap()), "so taking up the AI pen afterwards shows nothing");
+	await close();
+	// Taking up a pen by its button: shown, on that pen
+	await fresh();
+	await opened();
+	await button("AI pen: notes for the AI, never transcribed");
+	let pt = await penTap("AI pen");
+	ok(pt && pt.text === "Tap again to hide" && pt.onButton && pt.labelClear, `taking up the AI pen: a fingertip taps its button, the word beside the cards: ${JSON.stringify(pt)}`);
+	ok(await js("settings.penTapShown") === true, "and it is marked as shown");
+	await wait(2800);
+	ok(!(await penTap()), "it is gone by itself");
+	await button("Pen");
+	ok(!(await penTap()), "back to the pen: not shown again");
+	await close();
+	await fresh();
+	await opened();
+	await button("Lasso: circle ink to move it");
+	await button("Pen");
+	pt = await penTap("Pen");
+	ok(pt && pt.onButton && pt.labelClear, `another tool, then the pen: shown on the pen's button: ${JSON.stringify(pt)}`);
+	await wait(2800);
+	await close();
+	// While the hint on moving the toolbar is up, this one waits for the next pen
+	await fresh();
+	await js("settings.toolbarHintSeen = false");
+	await opened();
+	await button("AI pen: notes for the AI, never transcribed");
+	ok(!(await penTap()) && await js("settings.penTapShown") === false, "with the toolbar's hint up, taking up a pen shows nothing yet, and it is still to show");
+	await tapAt(...(await js("(() => { const r = __pad.hint.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()")));
+	await button("Pen");
+	ok((await penTap("Pen"))?.onButton === true, "that hint dismissed, the next pen taken up shows it");
+	await wait(2800);
+	await close();
+	// Back to the pen from the dial: the eye is on the dial, not the toolbar
+	await fresh();
+	await opened();
+	const dialAt2 = await js("(() => { const r = __pad.dial.el.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()");
+	await click(...dialAt2);
+	await click(...dialAt2);
+	ok((await state()).tool === "pen" && !(await penTap()) && await js("settings.penTapShown") === false, "back to the pen from the dial: nothing shown, still to show");
+	await close();
+	// Moving between hosts is an opening, not a pen taken up
+	await viewport(1180, 820);
+	await js("openSwappable(590, 820)");
+	await new Promise((r) => setTimeout(r, 300));
+	await button("Open beside the note");
+	await new Promise((r) => setTimeout(r, 300));
+	ok(!(await penTap()) && await js("settings.penTapShown") === false, "moving into the pane with a pen in hand shows nothing");
+	await button("Full screen");
+	await new Promise((r) => setTimeout(r, 300));
+	await close();
+	// In a row along the foot, the word goes above the cards
+	await viewport(820, 1180);
+	await js("settings.toolbarSide = 'bottom'");
+	await opened();
+	await button("AI pen: notes for the AI, never transcribed");
+	pt = await penTap("AI pen");
+	ok(pt && pt.onButton && pt.labelClear && pt.above, `with the toolbar at the foot: on the AI pen, the word above the cards: ${JSON.stringify(pt)}`);
+	await shot("pen-tap");
+	await wait(2800);
+	await button("Pen");
+	await js("settings.toolbarSide = 'right'; settings.penTapShown = true");
+	await close();
+
 	/* ---- closed and opened again: the same pad ---- */
 	await js("openPad([])");
 	await frame();
