@@ -164,6 +164,9 @@ export class InkPad {
 	/** Which of the three width slots is active. The widths themselves live in
 	 *  settings, so they survive a restart and follow the vault across devices. */
 	private sizeIdx = 1;
+	/** Whether the pen's width card is out. Out each time a pen is taken up;
+	 *  tapping the pen already in hand puts it away, and brings it back. */
+	private widthsOpen = true;
 	private get sizes() { return this.plugin.settings.sizes; }
 	private get size() { return this.sizes[this.sizeIdx] ?? 8; }
 	private undoStack: UndoEntry[] = [];
@@ -380,6 +383,7 @@ export class InkPad {
 	takeUpPen() {
 		this.tool = this.lastPen = "pen";
 		this.sizeIdx = 1;
+		this.widthsOpen = true;
 		this.eraserAt = null;
 		this.lasso = null;
 		this.sel = null;
@@ -467,6 +471,7 @@ export class InkPad {
 	/* ============ Tool bar ============ */
 
 	private setTool(tool: Tool) {
+		if (tool !== this.tool) this.widthsOpen = true;
 		this.tool = tool;
 		if (tool === "pen" || tool === "ai") this.lastPen = tool;
 		if (tool !== "eraser") this.eraserAt = null;
@@ -474,6 +479,15 @@ export class InkPad {
 		this.syncTools?.();
 		this.buildContextBar();
 		this.redrawLive();
+	}
+
+	/** A pen's button: takes it up, or, with it already in hand, puts its
+	 *  width card away or brings it back. The page keeps the card's room
+	 *  either way, so it does not move. (#20) */
+	private pickPen(pen: "pen" | "ai") {
+		if (this.tool !== pen) { this.setTool(pen); return; }
+		this.widthsOpen = !this.widthsOpen;
+		this.buildContextBar();
 	}
 
 	private buildToolbar() {
@@ -505,8 +519,8 @@ export class InkPad {
 			b.createDiv({ text: t(split ? "tool.splitLabel" : "tool.fullLabel"), attr: { style: S.btnCaption } });
 		}
 		sep();
-		const penBtn = btn("pen", t("tool.pen"), () => this.setTool("pen"));
-		const aiBtn = btn("pen", t("tool.aiPen"), () => this.setTool("ai"));
+		const penBtn = btn("pen", t("tool.pen"), () => this.pickPen("pen"));
+		const aiBtn = btn("pen", t("tool.aiPen"), () => this.pickPen("ai"));
 		aiBtn.createDiv({ text: "AI", attr: { style: S.btnBadge + `color:${NOTE_INK};` } });
 		const lasBtn = btn("lasso", t("tool.lasso"), () => this.setTool("lasso"));
 		sep();
@@ -865,9 +879,10 @@ export class InkPad {
 
 		// Only the pens have anything to configure, the eraser carrying its own
 		// settings in the dial, so for every other tool the column is detached
-		// from the DOM rather than merely hidden. It floats over the canvas, so
-		// attaching and detaching it never resizes the drawing area.
-		if (this.tool !== "pen" && this.tool !== "ai") { bar.remove(); return; }
+		// from the DOM rather than merely hidden, as it is when put away. It
+		// floats over the canvas, so attaching and detaching it never resizes
+		// the drawing area.
+		if ((this.tool !== "pen" && this.tool !== "ai") || !this.widthsOpen) { bar.remove(); return; }
 		if (!bar.isConnected) {
 			// Reapply the style: applyLayout skips the bar while it is detached
 			bar.setAttribute("style", this.across ? S.ctxBarRow : S.ctxBar);
