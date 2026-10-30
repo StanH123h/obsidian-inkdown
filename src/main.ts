@@ -59,6 +59,9 @@ export interface HandwritingSettings {
 	 *  Not skipped for having used the tap, which a stray touch also does. */
 	undoTapShown: boolean;
 	redoTapShown: boolean;
+	/** Whether tapping the pen in hand, to put its widths away, has been
+	 *  shown: once, on an opening with a pen in hand and its widths out */
+	penTapShown: boolean;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -92,6 +95,7 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	toolbarHintSeen: false,
 	undoTapShown: false,
 	redoTapShown: false,
+	penTapShown: false,
 };
 
 export default class HandwritingPlugin extends Plugin {
@@ -487,6 +491,7 @@ export default class HandwritingPlugin extends Plugin {
 		if (typeof s.toolbarHintSeen !== "boolean") s.toolbarHintSeen = false;
 		if (typeof s.undoTapShown !== "boolean") s.undoTapShown = false;
 		if (typeof s.redoTapShown !== "boolean") s.redoTapShown = false;
+		if (typeof s.penTapShown !== "boolean") s.penTapShown = false;
 		const widths = (saved: unknown, fallback: number[]) => {
 			const a = Array.isArray(saved) ? saved : [];
 			return fallback.map((d, i) => {

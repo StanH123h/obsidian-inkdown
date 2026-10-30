@@ -29,6 +29,12 @@ const CARD =
 	`background:var(--background-primary, #fff);border:1px solid ${BORDER};` +
 	"box-shadow:0 4px 18px rgba(0,0,0,.14);";
 
+// The word under a tap shown, in the theme's colours turned round
+const TAP_PILL =
+	"position:absolute;padding:6px 12px;border-radius:8px;" +
+	"font-size:15px;line-height:1.3;font-weight:600;white-space:nowrap;opacity:0;" +
+	"background:var(--text-normal, #222);color:var(--background-primary, #fff);box-shadow:0 4px 14px rgba(0,0,0,.25);";
+
 const BTN =
 	"position:relative;display:flex;align-items:center;justify-content:center;flex:0 0 auto;" +
 	"width:40px;height:40px;padding:0;margin:0;border:0;border-radius:9px;" +
@@ -100,10 +106,9 @@ export const S = {
 	tapRing:
 		"position:absolute;width:54px;height:54px;margin:-27px 0 0 -27px;border-radius:50%;box-sizing:border-box;" +
 		`border:2px solid ${ACCENT};opacity:0;`,
-	tapLabel:
-		"position:absolute;top:48px;transform:translateX(-50%);padding:6px 12px;border-radius:8px;" +
-		"font-size:15px;line-height:1.3;font-weight:600;white-space:nowrap;opacity:0;" +
-		"background:var(--text-normal, #222);color:var(--background-primary, #fff);box-shadow:0 4px 14px rgba(0,0,0,.25);",
+	tapLabel: TAP_PILL + "top:48px;transform:translateX(-50%);",
+	// The same, placed by pad.ts beside the cards
+	penTapLabel: TAP_PILL,
 
 	btn: BTN + `background:transparent;color:${MUTED};`,
 	btnOn: BTN + `background:${HOVER};color:${ACCENT};`,
