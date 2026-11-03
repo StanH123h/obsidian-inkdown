@@ -1121,6 +1121,121 @@ try {
 	ok(await ghost() === null, "back in the note, the real caret takes over");
 	await js("__editor.destroy(); __editorEl.remove()");
 
+	/* ---- the Pencil and a finger on the note beside the pad ---- */
+	await js("openSwappable(560, 820)");
+	await frame();
+	await button("Open beside the note");
+	await new Promise((r) => setTimeout(r, 300));
+	await js("movePane(610)");
+	await js("ghostEditor('First line of the note\\nSecond line, a little longer\\nThird line, the last one', 0)");
+	await js("__tapsOn = true; __cameForCaret = 0; __retargeted = 0; settings.caretHintShown = false; document.activeElement?.blur()");
+	await frame();
+	const xyOf = (pos) => js(`(() => { const c = __editor.coordsAtPos(${pos}); return [c.left + 1, (c.top + c.bottom) / 2]; })()`);
+	const noteNow = () => js(`(() => { const g = __editor.contentDOM.querySelector('.inkdown-ghost-caret'), m = __editor.state.selection.main;
+		return { focus: __editor.hasFocus, anchor: m.anchor, head: m.head, ghost: g ? __editor.posAtDOM(g) : null, text: __editor.state.doc.length }; })()`);
+	const penTapAt = async (pos) => { const [x, y] = await xyOf(pos); await pen([[x, y], [x, y]]); };
+	// Focused even for a moment, the note would bring the keyboard up
+	await js("__focusins = 0; __editor.contentDOM.addEventListener('focusin', () => __focusins++)");
+	const fingerAt = async (pos) => { const [x, y] = await xyOf(pos); await tapAt(x, y); await frame(); };
+	let nt = await noteNow();
+	await penTapAt(30);
+	nt = await noteNow();
+	ok(!nt.focus && nt.anchor === 30 && nt.head === 30 && nt.ghost === 30 && await js("__focusins") === 0, `a Pencil tap on the note moves its caret there without focusing it, not for a moment, so no keyboard; the stand-in shows it: ${JSON.stringify(nt)}, focused ${await js("__focusins")} times`);
+	ok(await js("!document.elementFromPoint(200, 250).closest('.cm-content') && !!document.elementFromPoint(200, 250).closest('.cm-scroller')"), "the space below the last line is the note's page, not its text");
+	await pen([[200, 250], [200, 250]]);
+	nt = await noteNow();
+	ok(!nt.focus && nt.anchor === nt.text && await js("__focusins") === 0, `a Pencil tap below the last line puts the caret at the end, without focusing: ${JSON.stringify(nt)}, focused ${await js("__focusins")} times`);
+	await js("__editor.focus(); __focusins = 0");
+	await penTapAt(5);
+	nt = await noteNow();
+	ok(!nt.focus && nt.anchor === 5 && nt.ghost === 5 && await js("__focusins") === 0, `with the note being typed in, a Pencil tap lets go of it, keyboard and all, for good, and moves the caret: ${JSON.stringify(nt)}, focused again ${await js("__focusins")} times`);
+	await fingerAt(12);
+	nt = await noteNow();
+	ok(nt.focus && nt.anchor === 12, `a finger tap is the note's own: it focuses it, for the keyboard, with the caret there: ${JSON.stringify(nt)}`);
+	await js("__tapsOn = false; document.activeElement?.blur()");
+	await penTapAt(20);
+	nt = await noteNow();
+	ok(nt.focus && nt.anchor === 20, `with the pad not beside the note, the Pencil is left to the note as well: ${JSON.stringify(nt)}`);
+	await js("__tapsOn = true; document.activeElement?.blur()");
+	ok(await js("__retargeted") === 0, "the note tapped is already the one written into: left as it is");
+
+	// The trip: from the pad to the note by finger, the caret moved, nothing
+	// typed, back to the pad
+	const caretCard = () => js(`(() => { const c = __pad.caretCard; if (!c?.isConnected) return null;
+		const r = c.getBoundingClientRect(), p = __pad.root.getBoundingClientRect(), n = c.firstElementChild.getBoundingClientRect();
+		const hit = [__pad.tools, __pad.ctxBar].filter((e) => e.isConnected).some((e) => { const b = e.getBoundingClientRect(); return r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top; });
+		const l = document.getElementById("pane-target").getBoundingClientRect();
+		return { left: r.left - p.left, right: p.right - r.right, bottom: p.bottom - r.bottom, w: r.width, notch: n.left < r.left ? "left" : n.right > r.right ? "right" : "none",
+			inside: r.left >= p.left && r.right <= p.right && r.top >= p.top && r.bottom <= p.bottom, hit,
+			label: r.left < l.right && r.right > l.left && r.top < l.bottom && r.bottom > l.top, text: c.textContent }; })()`);
+	const onPad = () => pen(line(820, 640, 880, 640, 8));
+	const trip = async (to) => { await onPad(); await fingerAt(to); };
+	const reset = () => js("settings.caretHintShown = false; __cameForCaret = 0; __pad.caretCard?.remove(); __pad.caretCard = null; document.activeElement?.blur()");
+	await trip(40);
+	ok(await js("__cameForCaret") === 0 && !(await caretCard()), "on the note, nothing yet");
+	await onPad();
+	let cd = await caretCard();
+	ok(await js("__cameForCaret") === 1 && cd, `back on the pad, nothing typed, the caret moved: the card: ${JSON.stringify(cd)}`);
+	ok(cd && cd.inside && !cd.hit && near(cd.left, 16) && cd.w <= 320 && cd.notch === "left", `by the pad's edge nearest the note, pointing at it, inside the pad and clear of the cards: ${JSON.stringify(cd)}`);
+	ok(cd && cd.text.includes("Tap with the Pencil") && cd.text.includes("Scribble") && cd.text.includes("Got it"), `it says the Pencil moves the caret, and what Scribble does: ${cd?.text}`);
+	ok(await js("settings.caretHintShown") === true, "and it is marked as shown");
+	await new Promise((r) => setTimeout(r, 3000));
+	ok(await caretCard(), "it stays, there being more to read than in a passing hint");
+	await shot("caret-card");
+	const gotIt = await js(`(() => { const b = [...__pad.caretCard.querySelectorAll('button')].find((b) => b.textContent === 'Got it').getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; })()`);
+	await tapAt(gotIt[0], gotIt[1]);
+	await frame();
+	ok(!(await caretCard()), "Got it puts it away");
+	await trip(10); await onPad();
+	ok(!(await caretCard()) && await js("__cameForCaret") === 2, "once only: the same trip again is noticed, and shows nothing");
+
+	await reset();
+	await trip(22);
+	await send("Input.insertText", { text: "x" });
+	await onPad();
+	ok(!(await caretCard()) && await js("__cameForCaret") === 0, "something typed on the trip: it was for typing, no card");
+	await js("__editor.dispatch({ changes: { from: 22, to: 23 } })");
+
+	await reset();
+	await js("__editor.dispatch({ selection: { anchor: 33 } })");
+	await trip(33);
+	nt = await noteNow();
+	await onPad();
+	ok(nt.anchor === 33 && !(await caretCard()) && await js("__cameForCaret") === 0, `the caret where it was: not a trip to move it, no card: ${JSON.stringify(nt)}`);
+
+	await reset();
+	await tapAt(560, 700);   // between the note and the pane: neither
+	await fingerAt(45);
+	await onPad();
+	ok(!(await caretCard()) && await js("__cameForCaret") === 0, "not from the pad: the eye was elsewhere, no card");
+
+	await reset();
+	await trip(15);
+	await penTapAt(25);
+	await onPad();
+	ok(!(await caretCard()) && await js("__cameForCaret") === 0, "the Pencil used on the trip: the caret moved its way, no card");
+
+	await reset();
+	await js("settings.toolbarHintSeen = false; __pad.showHint()");
+	await trip(50); await onPad();
+	ok(!(await caretCard()) && await js("settings.caretHintShown") === false, "with the tool bar's hint up, one hint at a time: no card, and still to show");
+	await js("settings.toolbarHintSeen = true; __pad.dismissHint()");
+	await trip(8); await onPad();
+	ok(await caretCard(), "that hint gone, the next trip shows it");
+
+	await reset();
+	await js("__noteSide = 'right'; __pad.moveToolbar('top')");
+	await frame();
+	await trip(36); await onPad();
+	cd = await caretCard();
+	ok(cd && near(cd.right, 16) && cd.notch === "right" && !cd.label && !cd.hit && cd.inside, `the note on the right: by the right edge, pointing right; with the tool bar at the top, clear of the note's name at the foot: ${JSON.stringify(cd)}`);
+	await js("__noteSide = 'left'; __pad.moveToolbar('right')");
+	await button("Full screen");
+	await new Promise((r) => setTimeout(r, 300));
+	ok(await js("__pad.caretCard") === null, "the pad moved on: the card goes with it");
+	await button("Close (your writing is kept for next time)");
+	await js("__tapsOn = false; settings.caretHintShown = true; __editor.destroy(); __editorEl.remove()");
+
 	/* ---- other shapes of screen ---- */
 	for (const [w, h, name] of [[1180, 820, "landscape"], [390, 844, "phone"]]) {
 		await viewport(w, h);

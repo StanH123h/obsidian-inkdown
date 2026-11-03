@@ -3,6 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import { InkPad, PadMode, PadModal, ToolbarSide } from "./pad";
 import { PAD_VIEW, PadView } from "./padview";
 import { ghostCaret, refreshGhosts } from "./ghost";
+import { NoteTaps, editorAt } from "./notetaps";
 import { InkOpts, Stroke, rasterize } from "./ink";
 import {
 	CLAUDE_MODELS, CONTEXT_AFTER, CONTEXT_BEFORE, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL, Engine, IMAGE_EDGE,
@@ -62,6 +63,9 @@ export interface HandwritingSettings {
 	/** Whether tapping the pen in hand, to put its widths away, has been
 	 *  shown: once, on an opening with a pen in hand and its widths out */
 	penTapShown: boolean;
+	/** Whether the card on moving the note's caret with the Pencil has been
+	 *  shown: once, back on the pad from moving it with a finger */
+	caretHintShown: boolean;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -96,7 +100,11 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	undoTapShown: false,
 	redoTapShown: false,
 	penTapShown: false,
+	caretHintShown: false,
 };
+
+/** A note's scrolling page, in editing view */
+const NOTE_PAGE = ".markdown-source-view .cm-scroller";
 
 export default class HandwritingPlugin extends Plugin {
 	settings: HandwritingSettings = DEFAULT_SETTINGS;
@@ -128,6 +136,29 @@ export default class HandwritingPlugin extends Plugin {
 	/** The pen button in each note's header, per view. A view can re-render
 	 *  its header and drop the button without saying so. */
 	private headerBtns = new Map<MarkdownView, HTMLElement>();
+
+	/** On a touch screen, with the pad beside the note: a Pencil tap on the
+	 *  note moves its caret without the keyboard, and a trip there by finger
+	 *  only to move it is told of that, once */
+	private noteTaps = new NoteTaps({
+		active: () => this.inPane && Platform.isMobile,
+		pad: () => this.app.workspace.getLeavesOfType(PAD_VIEW)[0]?.view.containerEl ?? null,
+		noteAt: (el) => editorAt(el, NOTE_PAGE),
+		target: () => {
+			const page = this.target()?.contentEl.querySelector(NOTE_PAGE);
+			return page ? editorAt(page, NOTE_PAGE) : null;
+		},
+		retarget: (view) => {
+			const note = view.state.field(editorInfoField, false);
+			if (note instanceof MarkdownView) { this.lastNote = note; this.showTargets(); }
+		},
+		cameForCaret: () => {
+			const note = this.target()?.containerEl.getBoundingClientRect();
+			const pane = this.app.workspace.getLeavesOfType(PAD_VIEW)[0]?.view.containerEl.getBoundingClientRect();
+			if (!note || !pane) return;
+			this.shown?.showCaretHint(note.left + note.width / 2 < pane.left + pane.width / 2 ? "left" : "right");
+		},
+	});
 
 	async onload() {
 		await this.loadSettings();
@@ -185,6 +216,8 @@ export default class HandwritingPlugin extends Plugin {
 		this.registerEvent(this.app.workspace.on("active-leaf-change", noteChanged));
 		this.registerEvent(this.app.workspace.on("file-open", noteChanged));
 		this.registerEditorExtension(ghostCaret((view) => this.writesInto(view)));
+		this.registerEditorExtension(this.noteTaps.extension);
+		this.register(this.noteTaps.attach(document));
 
 		this.app.workspace.onLayoutReady(() => { this.syncHeaderButtons(); noteChanged(); });
 
@@ -492,6 +525,7 @@ export default class HandwritingPlugin extends Plugin {
 		if (typeof s.undoTapShown !== "boolean") s.undoTapShown = false;
 		if (typeof s.redoTapShown !== "boolean") s.redoTapShown = false;
 		if (typeof s.penTapShown !== "boolean") s.penTapShown = false;
+		if (typeof s.caretHintShown !== "boolean") s.caretHintShown = false;
 		const widths = (saved: unknown, fallback: number[]) => {
 			const a = Array.isArray(saved) ? saved : [];
 			return fallback.map((d, i) => {

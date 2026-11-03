@@ -109,6 +109,27 @@ export const S = {
 	tapLabel: TAP_PILL + "top:48px;transform:translateX(-50%);",
 	// The same, placed by pad.ts beside the cards
 	penTapLabel: TAP_PILL,
+	// The card on moving the note's caret with the Pencil, by the pad's edge
+	// nearest the note: in the hints' turned-round colours, and staying until
+	// put away. pad.ts sets its width and corner.
+	caretCard:
+		"position:absolute;z-index:30;box-sizing:border-box;padding:14px 14px 12px;border-radius:14px;" +
+		"background:var(--text-normal, #222);color:var(--background-primary, #fff);" +
+		"box-shadow:0 6px 22px rgba(0,0,0,.3);cursor:pointer;",
+	// Its point, toward the note
+	caretNotch: (side: "left" | "right") =>
+		`position:absolute;top:30px;${side}:-6px;width:12px;height:12px;transform:rotate(45deg);` +
+		"background:var(--text-normal, #222);",
+	caretHead: "display:flex;gap:12px;align-items:center;",
+	caretTitle: "font-size:15px;font-weight:700;line-height:1.3;",
+	caretSub: "font-size:13px;line-height:1.4;margin-top:4px;opacity:.75;",
+	caretRule: "height:1px;margin:12px 0 10px;background:currentColor;opacity:.15;",
+	caretFoot: "display:flex;gap:10px;align-items:center;",
+	caretWarn: "flex:1;font-size:12px;line-height:1.4;opacity:.7;",
+	caretOk:
+		"flex:0 0 auto;margin:0;padding:6px 14px;border:0;border-radius:8px;cursor:pointer;" +
+		"font-size:13px;font-weight:600;line-height:1.3;" +
+		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);",
 
 	btn: BTN + `background:transparent;color:${MUTED};`,
 	btnOn: BTN + `background:${HOVER};color:${ACCENT};`,
