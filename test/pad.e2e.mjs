@@ -1060,10 +1060,16 @@ try {
 	await shot("pane-narrow");
 	await js("resizePane(590, 820)");
 	await new Promise((r) => setTimeout(r, 300));
+	// #19: zoomed in to suit the hand, and written down the page
+	await js("__pad.zoom = 2.4; __pad.panX = 180; __pad.panY = 320; __pad.syncViewport()");
+	const viewBefore = await js("({ zoom: __pad.zoom, panX: __pad.panX, panY: __pad.panY })");
 	await button("Turn this into Markdown at the cursor");
 	h = await host();
 	const sent = await js("__sent?.length ?? null");
 	ok(sent === 3 && h.strokes === 0 && h.undo === 0 && h.mounted, `converting in the pane sends the page and leaves a clean one open: sent ${sent}, ${JSON.stringify(h)}`);
+	const viewAfter = await js("({ zoom: __pad.zoom, panX: __pad.panX, panY: __pad.panY })");
+	ok(viewAfter.zoom === viewBefore.zoom && viewAfter.panX === viewBefore.panX && viewAfter.panY === viewBefore.panY,
+		`the clean page stays as the user left it, zoom and place: ${JSON.stringify(viewAfter)} (was ${JSON.stringify(viewBefore)})`);
 	await js("__pad.setPage(__sent)");
 	s = await state();
 	ok(s.strokes === 3, "a page put back after a failure shows");
