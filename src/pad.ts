@@ -398,14 +398,11 @@ export class InkPad {
 
 	/** Hand the page over and start a clean one, for a host that stays open
 	 *  after converting. The undo history goes with it: undoing back into a
-	 *  page already sent would send it twice. The clean page opens as a new
-	 *  pad does, at the top, filling the width. */
+	 *  page already sent would send it twice. The view stays as it is, zoom
+	 *  and place: the user goes on writing where they were. */
 	takePage(): Stroke[] {
 		const page = this.strokes;
 		this.setPage([]);
-		this.zoom = this.widthZoom();
-		this.panX = this.panY = -Infinity;
-		this.syncViewport();
 		return page;
 	}
 
