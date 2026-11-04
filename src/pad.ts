@@ -7,6 +7,7 @@ import { CARD_EDGE, CARD_GAP, CTX_H, CTX_W, ICONS, MODAL, S, TAP_DOT, TAP_LABEL,
 import { t } from "./i18n";
 import type HandwritingPlugin from "./main";
 import { buildEraserDial, Dial } from "./dial";
+import { caretPicture, hintCard } from "./hintcard";
 
 const EDGE_PAD = 12;   // css px
 /* A tap with two fingers undoes, with three redoes: each finger lands within
@@ -29,26 +30,6 @@ const INK = "#1a1a1a";
 
 /** Diameter of the preview dot on a width button, capped so it fits the button */
 const dotPx = (sz: number) => Math.min(sz + 4, 28);
-
-/** The caret card's picture: lines of a note, its caret, and the Pencil's tip
- *  on it. In the card's colours, the caret in the stand-in caret's. */
-function caretPicture(parent: HTMLElement) {
-	const NS = "http://www.w3.org/2000/svg";
-	const el = (tag: string, attrs: Record<string, string>, to: Element) => {
-		const e = document.createElementNS(NS, tag);
-		for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-		to.appendChild(e);
-		return e;
-	};
-	const svg = el("svg", { width: "60", height: "60", viewBox: "0 0 60 60", style: "flex:0 0 auto;" }, parent);
-	for (const [y, w] of [[12, 40], [26, 22], [40, 34]])
-		el("rect", { x: "4", y: String(y), width: String(w), height: "5", rx: "2.5", style: "fill:currentColor;opacity:.4;" }, svg);
-	el("rect", { x: "29", y: "22", width: "2.6", height: "13", rx: "1", style: "fill:var(--interactive-accent, #8a6cf0);" }, svg);
-	// The pen icon, its tip on the caret
-	const pen = el("g", { transform: "translate(29.5 3) scale(1.3)", style: "fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;" }, svg);
-	el("path", { d: "M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z", style: "fill:var(--text-normal, #222);" }, pen);
-	el("path", { d: "m15 5 4 4" }, pen);
-}
 
 /** "ai" is the AI pen: it writes notes to the model, which are never
  *  transcribed. Same gesture as the pen, different meaning. */
@@ -924,9 +905,10 @@ export class InkPad {
 	/** Once: back on the pad from moving the note's caret with a finger, the
 	 *  keyboard having come up for nothing (see notetaps.ts). A card by the
 	 *  pad's edge nearest the note, pointing at it: the Pencil moves the caret
-	 *  without the keyboard; and if the keyboard will not come back, Scribble
-	 *  is why. There is more to read than in the other hints, so it stays
-	 *  until put away, a tap anywhere on it; the pen writes on around it.
+	 *  without the keyboard. Scribble keeping the keyboard down has a card of
+	 *  its own, when it happens (see main.ts). There is more to read than in
+	 *  the other hints, so it stays until put away, a tap anywhere on it; the
+	 *  pen writes on around it.
 	 *  Not while another hint is up, one at a time: it waits for the next
 	 *  such trip. */
 	showCaretHint(noteSide: "left" | "right") {
@@ -934,23 +916,11 @@ export class InkPad {
 		if (s.caretHintShown || !this.mounted || this.hint || this.tapDemo || this.caretCard) return;
 		s.caretHintShown = true;
 		void this.plugin.saveSettings();
-		const card = this.caretCard = this.root.createDiv({ attr: { style: S.caretCard } });
-		card.createDiv({ attr: { style: S.caretNotch(noteSide) } });
-		const head = card.createDiv({ attr: { style: S.caretHead } });
-		caretPicture(head);
-		const words = head.createDiv();
-		words.createDiv({ text: t("hint.caretTitle"), attr: { style: S.caretTitle } });
-		words.createDiv({ text: t("hint.caretSub"), attr: { style: S.caretSub } });
-		card.createDiv({ attr: { style: S.caretRule } });
-		const foot = card.createDiv({ attr: { style: S.caretFoot } });
-		foot.createDiv({ text: "ⓘ " + t("hint.caretScribble"), attr: { style: S.caretWarn } });
-		foot.createEl("button", { text: t("hint.gotIt"), attr: { style: S.caretOk } });
-		card.addEventListener("pointerdown", (e: PointerEvent) => {
-			e.preventDefault();
-			e.stopPropagation();
-			card.remove();
-			if (this.caretCard === card) this.caretCard = null;
+		const card: HTMLElement = this.caretCard = hintCard(this.root, {
+			picture: caretPicture, title: t("hint.caretTitle"), sub: t("hint.caretSub"), button: t("hint.gotIt"),
+			onClose: () => { if (this.caretCard === card) this.caretCard = null; },
 		});
+		card.prepend(card.createDiv({ attr: { style: S.cardNotch(noteSide) } }));
 		// Clear of the cards, and of the pane's note name, which sits at the
 		// foot while the tool bar is at the top
 		const r = this.cardRoom, edge = 16;

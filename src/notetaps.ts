@@ -13,11 +13,19 @@ import { EditorView } from "@codemirror/view";
  * Someone who goes from the pad to the note with a finger, moves the caret,
  * types nothing and comes back to the pad came only to move the caret: the
  * keyboard came up for nothing. That is the moment to show that the Pencil
- * does it without the keyboard (see InkPad.showCaretHint). */
+ * does it without the keyboard (see InkPad.showCaretHint).
+ *
+ * With Scribble on, once the Pencil has touched text, iPadOS gives only its
+ * compact bar for typing, however the note is tapped after, and no plugin
+ * can lift that. It is seen in the keyboard Obsidian reports, short and with
+ * no keyboard attached: the moment to say what it is. */
 
 /** How far a tap may wander, in css px, and how long it may be held, in ms */
 const TAP_MOVE = 12;
 const TAP_HOLD = 600;
+/** The tallest a keyboard Obsidian reports can be and still be Scribble's
+ *  compact bar, about 70 on an iPad, in css px; the full keyboard is over 300 */
+const COMPACT_BAR = 150;
 
 /** Things on a note's page a tap is meant for, rather than the text: left alone */
 const ACTIVE = "a, button, input, select, textarea, label, [contenteditable='false'], " +
@@ -46,6 +54,8 @@ export interface NoteTapsHost {
 	retarget(view: EditorView): void;
 	/** A trip to the note made only to move the caret, by finger */
 	cameForCaret(): void;
+	/** The note focused, and Scribble's compact bar up instead of the keyboard */
+	keyboardStuck(): void;
 }
 
 export class NoteTaps {
@@ -78,7 +88,13 @@ export class NoteTaps {
 			["focusin", (e) => this.focusIn(e as FocusEvent)],
 		];
 		for (const [type, fn] of on) doc.addEventListener(type, fn, opts);
-		return () => { for (const [type, fn] of on) doc.removeEventListener(type, fn, opts); };
+		// Obsidian's own, on the window, as the keyboard comes up
+		const win = doc.defaultView, kb = (e: Event) => this.keyboard(e, doc);
+		win?.addEventListener("keyboardWillShow", kb);
+		return () => {
+			for (const [type, fn] of on) doc.removeEventListener(type, fn, opts);
+			win?.removeEventListener("keyboardWillShow", kb);
+		};
 	}
 
 	private down(e: PointerEvent) {
@@ -139,6 +155,20 @@ export class NoteTaps {
 	private focusIn(e: FocusEvent) {
 		const p = this.pen;
 		if (p?.tapped != null && e.target === p.view.contentDOM && e.timeStamp - p.tapped < 500) p.view.contentDOM.blur();
+	}
+
+	/** The keyboard coming up, as Obsidian reports it: only the compact bar,
+	 *  with none attached, for the note beside the pad. Not a trip to move
+	 *  the caret then: there was no keyboard to come up for nothing. */
+	private keyboard(e: Event, doc: Document) {
+		const k = e as Event & { keyboardHeight?: unknown; hasPhysicalKeyboard?: unknown };
+		const h = typeof k.keyboardHeight === "number" ? k.keyboardHeight : 0;
+		if (!this.host.active() || k.hasPhysicalKeyboard === true || h <= 0 || h >= COMPACT_BAR) return;
+		const at = doc.activeElement;
+		const view = at ? this.host.noteAt(at) : null;
+		if (!view || at !== view.contentDOM) return;
+		this.away = null;
+		this.host.keyboardStuck();
 	}
 
 	private isTap(p: { x: number; y: number; t: number }, x: number, y: number, t: number) {
