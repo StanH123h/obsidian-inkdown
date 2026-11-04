@@ -1177,7 +1177,7 @@ try {
 	let cd = await caretCard();
 	ok(await js("__cameForCaret") === 1 && cd, `back on the pad, nothing typed, the caret moved: the card: ${JSON.stringify(cd)}`);
 	ok(cd && cd.inside && !cd.hit && near(cd.left, 16) && cd.w <= 320 && cd.notch === "left", `by the pad's edge nearest the note, pointing at it, inside the pad and clear of the cards: ${JSON.stringify(cd)}`);
-	ok(cd && cd.text.includes("Tap with the Pencil") && cd.text.includes("Scribble") && cd.text.includes("Got it"), `it says the Pencil moves the caret, and what Scribble does: ${cd?.text}`);
+	ok(cd && cd.text.includes("Tap with the Pencil") && !cd.text.includes("Scribble") && cd.text.includes("Got it"), `it says the Pencil moves the caret, and nothing of Scribble, which has a card of its own for when it happens: ${cd?.text}`);
 	ok(await js("settings.caretHintShown") === true, "and it is marked as shown");
 	await new Promise((r) => setTimeout(r, 3000));
 	ok(await caretCard(), "it stays, there being more to read than in a passing hint");
@@ -1230,6 +1230,55 @@ try {
 	cd = await caretCard();
 	ok(cd && near(cd.right, 16) && cd.notch === "right" && !cd.label && !cd.hit && cd.inside, `the note on the right: by the right edge, pointing right; with the tool bar at the top, clear of the note's name at the foot: ${JSON.stringify(cd)}`);
 	await js("__noteSide = 'left'; __pad.moveToolbar('right')");
+
+	await js("__pad.caretCard?.remove(); __pad.caretCard = null; settings.caretHintShown = true; document.activeElement?.blur()");
+
+	// Scribble: a finger tap on the note brings up only its compact bar, as
+	// Obsidian reports it
+	await js("document.documentElement.style.setProperty('--keyboard-height', '70px'); document.body.style.setProperty('--mobile-toolbar-height', '44px'); settings.scribbleHintShown = false; __stuck = 0; __scribble = null");
+	const keyboard = (h, physical = false) => js(`(() => { const e = new Event("keyboardWillShow"); Object.assign(e, { keyboardHeight: ${h}, hasPhysicalKeyboard: ${physical}, screenHeight: 820 }); window.dispatchEvent(e); })()`);
+	const scribbleCard = () => js(`(() => { const c = __scribble; if (!c?.isConnected) return null;
+		const r = c.getBoundingClientRect(), n = __editorEl.getBoundingClientRect(), t = c.firstElementChild.getBoundingClientRect();
+		return { gap: innerHeight - r.bottom, centred: Math.abs((r.left + r.right) / 2 - (n.left + n.right) / 2) < 1, within: r.left >= n.left && r.right <= n.right, w: r.width, notchDown: t.bottom > r.bottom, text: c.textContent }; })()`);
+	await fingerAt(8);
+	await keyboard(422);
+	ok(await js("__stuck") === 0 && !(await scribbleCard()), "the full keyboard: nothing");
+	await keyboard(70, true);
+	ok(await js("__stuck") === 0, "a short bar with a keyboard attached: its own bar, nothing");
+	await js("__tapsOn = false");
+	await keyboard(70);
+	ok(await js("__stuck") === 0, "the pad not beside the note: nothing");
+	await js("__tapsOn = true; document.activeElement?.blur()");
+	await keyboard(70);
+	ok(await js("__stuck") === 0, "the note not focused: not its keyboard, nothing");
+	await fingerAt(8);
+	await keyboard(70);
+	await frame();
+	let sc = await scribbleCard();
+	ok(await js("__stuck") === 1 && sc, `the note focused by a finger, and only the compact bar: the card: ${JSON.stringify(sc)}`);
+	ok(sc && near(sc.gap, 70 + 44 + 14, 1) && sc.centred && sc.within && sc.w === 400 && sc.notchDown, `over the note at its foot, above the tool bar and the bar, pointing down at them: ${JSON.stringify(sc)}`);
+	ok(sc && sc.text.includes("Scribble") && sc.text.includes("Settings › Apple Pencil") && sc.text.includes("Got it") && await js("settings.scribbleHintShown") === true, `it says what it is and where to turn it off, and is marked as shown: ${sc?.text}`);
+	await shot("scribble-card");
+	await js("document.documentElement.style.setProperty('--keyboard-height', '0px')");
+	sc = await scribbleCard();
+	ok(sc && near(sc.gap, 44 + 14, 1), `the bar put away, it stays, following the keyboard down: ${JSON.stringify(sc)}`);
+	const sOk = await js(`(() => { const b = [...__scribble.querySelectorAll('button')].find((b) => b.textContent === 'Got it').getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; })()`);
+	await tapAt(sOk[0], sOk[1]);
+	await frame();
+	ok(!(await scribbleCard()), "Got it puts it away");
+	await fingerAt(9);
+	await keyboard(70);
+	ok(await js("__stuck") === 2 && !(await scribbleCard()), "once only: stuck again is noticed, and shows nothing");
+	await js("settings.caretHintShown = false; __cameForCaret = 0; document.activeElement?.blur()");
+	await onPad();
+	const second = await js("__editor.state.doc.toString().indexOf('Second') + 3");
+	await fingerAt(second);
+	nt = await noteNow();
+	await keyboard(70);
+	await onPad();
+	ok(nt.anchor === second && await js("__cameForCaret") === 0 && !(await caretCard()), `stuck on a trip to the note, the caret moved: not a trip to move it, no caret card: ${JSON.stringify(nt)}`);
+	await js("document.documentElement.style.removeProperty('--keyboard-height'); document.body.style.removeProperty('--mobile-toolbar-height'); settings.caretHintShown = true; settings.scribbleHintShown = true");
+
 	await button("Full screen");
 	await new Promise((r) => setTimeout(r, 300));
 	ok(await js("__pad.caretCard") === null, "the pad moved on: the card goes with it");

@@ -53,6 +53,14 @@ async function load(stored) {
   s = await load({ caretHintShown: 'yes' });
   eq(s.caretHintShown, false, 'a damaged flag: still to show');
 
+  // The Scribble card, new as well, the same way
+  s = await load({ caretHintShown: true });
+  eq(s.scribbleHintShown, false, 'from an older plugin: the Scribble card is still to show');
+  s = await load({ scribbleHintShown: true });
+  eq(s.scribbleHintShown, true, 'shown once, it stays shown');
+  s = await load({ scribbleHintShown: 1 });
+  eq(s.scribbleHintShown, false, 'a damaged flag: still to show');
+
   console.log(bad ? `\n${bad} of ${n} checks failed` : `PASS settings: ${n} checks`);
   process.exit(bad ? 1 : 0);
 })().catch((e) => { console.log('CRASH', e.stack); process.exit(1); });

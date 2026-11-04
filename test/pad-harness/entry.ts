@@ -2,6 +2,7 @@ import { Scope } from "obsidian";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { ghostCaret, refreshGhosts } from "../../src/ghost";
+import { scribbleHint } from "../../src/hintcard";
 import { NoteTaps, editorAt } from "../../src/notetaps";
 import { InkPad, PadModal } from "../../src/pad";
 import { S } from "../../src/styles";
@@ -11,6 +12,7 @@ const settings = {
 	sizes: [4, 8, 14], aiSizes: [4, 8, 14], sizeIdx: 1, aiSizeIdx: 1, eraserMode: "stroke", eraserSize: 14, smooth: 0.55, thin: 0.7, taper: 1, filter: 1,
 	predict: 2, lowLatency: true, allowFinger: false, dialX: -1, dialY: -1, curve: 1,
 	toolbarSide: "right", toolbarHintSeen: true, undoTapShown: true, redoTapShown: true, penTapShown: true, caretHintShown: true,
+	scribbleHintShown: true,
 };
 const plugin = {
 	settings,
@@ -76,7 +78,9 @@ w.movePane = (left: number) => pane?.setCssProps({ left: left + "px" });
 /* The Pencil and a finger on the note beside the pad (see notetaps.ts): the
  * stand-in note below is the note, the stand-in pane the pad's. On while
  * __tapsOn is set; a trip there only to move the caret is counted in
- * __cameForCaret and shows the card, on the side __noteSide says. */
+ * __cameForCaret and shows the card, on the side __noteSide says. Scribble's
+ * compact bar coming up instead of the keyboard is counted in __stuck, and
+ * its card, when shown, goes in __scribble. */
 const taps = new NoteTaps({
 	active: () => !!w.__tapsOn && !!pane,
 	pad: () => pane,
@@ -84,6 +88,10 @@ const taps = new NoteTaps({
 	target: () => w.__editor ?? null,
 	retarget: () => { w.__retargeted = (w.__retargeted ?? 0) + 1; },
 	cameForCaret: () => { w.__cameForCaret = (w.__cameForCaret ?? 0) + 1; w.__pad.showCaretHint(w.__noteSide ?? "left"); },
+	keyboardStuck: () => {
+		w.__stuck = (w.__stuck ?? 0) + 1;
+		w.__scribble = scribbleHint(plugin, document, w.__editorEl.getBoundingClientRect()) ?? w.__scribble;
+	},
 });
 taps.attach(document);
 

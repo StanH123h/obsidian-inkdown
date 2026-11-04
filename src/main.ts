@@ -3,6 +3,7 @@ import type { EditorView } from "@codemirror/view";
 import { InkPad, PadMode, PadModal, ToolbarSide } from "./pad";
 import { PAD_VIEW, PadView } from "./padview";
 import { ghostCaret, refreshGhosts } from "./ghost";
+import { scribbleHint } from "./hintcard";
 import { NoteTaps, editorAt } from "./notetaps";
 import { InkOpts, Stroke, rasterize } from "./ink";
 import {
@@ -66,6 +67,9 @@ export interface HandwritingSettings {
 	/** Whether the card on moving the note's caret with the Pencil has been
 	 *  shown: once, back on the pad from moving it with a finger */
 	caretHintShown: boolean;
+	/** Whether the card on Scribble keeping the keyboard down has been shown:
+	 *  once, when a finger tap on the note brings up only its compact bar */
+	scribbleHintShown: boolean;
 }
 
 const DEFAULT_SETTINGS: HandwritingSettings = {
@@ -101,6 +105,7 @@ const DEFAULT_SETTINGS: HandwritingSettings = {
 	redoTapShown: false,
 	penTapShown: false,
 	caretHintShown: false,
+	scribbleHintShown: false,
 };
 
 /** A note's scrolling page, in editing view */
@@ -139,7 +144,8 @@ export default class HandwritingPlugin extends Plugin {
 
 	/** On a touch screen, with the pad beside the note: a Pencil tap on the
 	 *  note moves its caret without the keyboard, and a trip there by finger
-	 *  only to move it is told of that, once */
+	 *  only to move it is told of that, once; so is Scribble, when it keeps
+	 *  the keyboard down */
 	private noteTaps = new NoteTaps({
 		active: () => this.inPane && Platform.isMobile,
 		pad: () => this.app.workspace.getLeavesOfType(PAD_VIEW)[0]?.view.containerEl ?? null,
@@ -158,7 +164,13 @@ export default class HandwritingPlugin extends Plugin {
 			if (!note || !pane) return;
 			this.shown?.showCaretHint(note.left + note.width / 2 < pane.left + pane.width / 2 ? "left" : "right");
 		},
+		keyboardStuck: () => {
+			const note = this.target()?.containerEl.getBoundingClientRect();
+			if (note) this.scribbleCard = scribbleHint(this, document, note) ?? this.scribbleCard;
+		},
 	});
+	/** The card on Scribble, once shown: taken away with the plugin */
+	private scribbleCard: HTMLElement | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -218,6 +230,7 @@ export default class HandwritingPlugin extends Plugin {
 		this.registerEditorExtension(ghostCaret((view) => this.writesInto(view)));
 		this.registerEditorExtension(this.noteTaps.extension);
 		this.register(this.noteTaps.attach(document));
+		this.register(() => this.scribbleCard?.remove());
 
 		this.app.workspace.onLayoutReady(() => { this.syncHeaderButtons(); noteChanged(); });
 
@@ -526,6 +539,7 @@ export default class HandwritingPlugin extends Plugin {
 		if (typeof s.redoTapShown !== "boolean") s.redoTapShown = false;
 		if (typeof s.penTapShown !== "boolean") s.penTapShown = false;
 		if (typeof s.caretHintShown !== "boolean") s.caretHintShown = false;
+		if (typeof s.scribbleHintShown !== "boolean") s.scribbleHintShown = false;
 		const widths = (saved: unknown, fallback: number[]) => {
 			const a = Array.isArray(saved) ? saved : [];
 			return fallback.map((d, i) => {

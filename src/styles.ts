@@ -109,24 +109,34 @@ export const S = {
 	tapLabel: TAP_PILL + "top:48px;transform:translateX(-50%);",
 	// The same, placed by pad.ts beside the cards
 	penTapLabel: TAP_PILL,
-	// The card on moving the note's caret with the Pencil, by the pad's edge
-	// nearest the note: in the hints' turned-round colours, and staying until
-	// put away. pad.ts sets its width and corner.
-	caretCard:
+	// The cards on the Pencil and the note (see hintcard.ts): in the hints'
+	// turned-round colours, and staying until put away. Whoever shows one
+	// sets its width and corner.
+	card:
 		"position:absolute;z-index:30;box-sizing:border-box;padding:14px 14px 12px;border-radius:14px;" +
 		"background:var(--text-normal, #222);color:var(--background-primary, #fff);" +
 		"box-shadow:0 6px 22px rgba(0,0,0,.3);cursor:pointer;",
-	// Its point, toward the note
-	caretNotch: (side: "left" | "right") =>
+	// Its point: toward the note, from the pad
+	cardNotch: (side: "left" | "right") =>
 		`position:absolute;top:30px;${side}:-6px;width:12px;height:12px;transform:rotate(45deg);` +
 		"background:var(--text-normal, #222);",
-	caretHead: "display:flex;gap:12px;align-items:center;",
-	caretTitle: "font-size:15px;font-weight:700;line-height:1.3;",
-	caretSub: "font-size:13px;line-height:1.4;margin-top:4px;opacity:.75;",
-	caretRule: "height:1px;margin:12px 0 10px;background:currentColor;opacity:.15;",
-	caretFoot: "display:flex;gap:10px;align-items:center;",
-	caretWarn: "flex:1;font-size:12px;line-height:1.4;opacity:.7;",
-	caretOk:
+	// or down, at the bars at the foot of the screen
+	cardNotchDown:
+		"position:absolute;bottom:-6px;left:calc(50% - 6px);width:12px;height:12px;transform:rotate(45deg);" +
+		"background:var(--text-normal, #222);",
+	cardHead: "display:flex;gap:12px;align-items:center;",
+	cardTitle: "font-size:15px;font-weight:700;line-height:1.3;",
+	cardSub: "font-size:13px;line-height:1.4;margin-top:4px;opacity:.75;",
+	cardRule: "height:1px;margin:12px 0 10px;background:currentColor;opacity:.15;",
+	cardFoot: "display:flex;justify-content:flex-end;margin-top:12px;",
+	cardFootRuled: "display:flex;gap:10px;align-items:center;",
+	cardLine: "flex:1;font-size:13px;line-height:1.4;font-weight:600;",
+	// The Scribble card: over the note, just above Obsidian's tool bar and
+	// the keyboard, as tall as Obsidian says they are
+	scribbleCard:
+		"position:fixed;z-index:var(--layer-notice, 60);" +
+		"bottom:calc(var(--keyboard-height, 0px) + var(--mobile-toolbar-height, 0px) + 14px);",
+	cardOk:
 		"flex:0 0 auto;margin:0;padding:6px 14px;border:0;border-radius:8px;cursor:pointer;" +
 		"font-size:13px;font-weight:600;line-height:1.3;" +
 		"background:var(--interactive-accent, #5b6ed6);color:var(--text-on-accent, #fff);",
@@ -235,7 +245,6 @@ export const S = {
 	ghostCaret:
 		"display:inline-block;width:3px;height:1.3em;margin:0 -1.5px;vertical-align:-0.3em;" +
 		"border-radius:1.5px;pointer-events:none;background:var(--interactive-accent, #8a6cf0);",
-
 	// Which note a pane's page goes into, across the pane from the tool bar:
 	// at the top, unless the tool bar is. The pen writes straight through it.
 	target: (toolbarAt: string) =>
