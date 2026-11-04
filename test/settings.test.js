@@ -1,5 +1,5 @@
 /* Settings as loadSettings() reads them from data.json: an older plugin's,
- * a damaged one, none at all. Only the pens' widths for now.
+ * a damaged one, none at all. The pens' widths, and the caret card's flag.
  *
  * Runs the real loadSettings() from main.ts, with data.json stood in for. */
 
@@ -44,6 +44,14 @@ async function load(stored) {
   s.sizes[0] = 7; s.aiSizes[0] = 7;
   s = await load(null);
   eq([s.sizes[0], s.aiSizes[0]], [4, 4], 'editing a loaded width leaves the defaults alone');
+
+  // The caret card, new: not yet shown, unless saved as shown; anything else is not shown
+  s = await load({ sizes: [3, 9, 20] });
+  eq(s.caretHintShown, false, 'from an older plugin: the caret card is still to show');
+  s = await load({ caretHintShown: true });
+  eq(s.caretHintShown, true, 'shown once, it stays shown');
+  s = await load({ caretHintShown: 'yes' });
+  eq(s.caretHintShown, false, 'a damaged flag: still to show');
 
   console.log(bad ? `\n${bad} of ${n} checks failed` : `PASS settings: ${n} checks`);
   process.exit(bad ? 1 : 0);

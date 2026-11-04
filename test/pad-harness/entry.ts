@@ -2,6 +2,7 @@ import { Scope } from "obsidian";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { ghostCaret, refreshGhosts } from "../../src/ghost";
+import { NoteTaps, editorAt } from "../../src/notetaps";
 import { InkPad, PadModal } from "../../src/pad";
 import { S } from "../../src/styles";
 import { InkOpts, Stroke, build, drawStroke, rasterize } from "../../src/ink";
@@ -9,7 +10,7 @@ import { InkOpts, Stroke, build, drawStroke, rasterize } from "../../src/ink";
 const settings = {
 	sizes: [4, 8, 14], aiSizes: [4, 8, 14], sizeIdx: 1, aiSizeIdx: 1, eraserMode: "stroke", eraserSize: 14, smooth: 0.55, thin: 0.7, taper: 1, filter: 1,
 	predict: 2, lowLatency: true, allowFinger: false, dialX: -1, dialY: -1, curve: 1,
-	toolbarSide: "right", toolbarHintSeen: true, undoTapShown: true, redoTapShown: true, penTapShown: true,
+	toolbarSide: "right", toolbarHintSeen: true, undoTapShown: true, redoTapShown: true, penTapShown: true, caretHintShown: true,
 };
 const plugin = {
 	settings,
@@ -69,13 +70,32 @@ w.openSwappable = (width: number, height: number, strokes: unknown[] = []) => {
 	showFull(new InkPad(plugin as any, strokes as any), [width, height]);
 };
 w.resizePane = (width: number, height: number) => pane?.setCssProps({ width: width + "px", height: height + "px" });
+/** The pane moved along, to the right of the stand-in note as in split view */
+w.movePane = (left: number) => pane?.setCssProps({ left: left + "px" });
+
+/* The Pencil and a finger on the note beside the pad (see notetaps.ts): the
+ * stand-in note below is the note, the stand-in pane the pad's. On while
+ * __tapsOn is set; a trip there only to move the caret is counted in
+ * __cameForCaret and shows the card, on the side __noteSide says. */
+const taps = new NoteTaps({
+	active: () => !!w.__tapsOn && !!pane,
+	pad: () => pane,
+	noteAt: (el) => editorAt(el, ".cm-scroller"),
+	target: () => w.__editor ?? null,
+	retarget: () => { w.__retargeted = (w.__retargeted ?? 0) + 1; },
+	cameForCaret: () => { w.__cameForCaret = (w.__cameForCaret ?? 0) + 1; w.__pad.showCaretHint(w.__noteSide ?? "left"); },
+});
+taps.attach(document);
 
 /* A plain CodeMirror editor with the stand-in caret, as a note has it. It
  * counts as the note the pad writes into while __wanted is set. */
 w.__wanted = true;
 w.ghostEditor = (doc: string, at: number) => {
 	const parent = document.body.createDiv({ attr: { style: "position:fixed;left:0;top:0;width:500px;height:300px;background:#fff;font:16px sans-serif;" } });
-	w.__editor = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: at }, extensions: [ghostCaret(() => !!w.__wanted)] }) });
+	w.__editor = new EditorView({ parent, state: EditorState.create({ doc, selection: { anchor: at }, extensions: [ghostCaret(() => !!w.__wanted), taps.extension,
+		// As in Obsidian, the text only as tall as it is, with the page's
+		// space below it
+		EditorView.theme({ "&": { height: "100%" }, ".cm-content": { minHeight: "0 !important" } })] }) });
 	w.__editorEl = parent;
 };
 w.refreshGhosts = refreshGhosts;
