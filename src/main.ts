@@ -8,7 +8,7 @@ import { NoteTaps, editorAt } from "./notetaps";
 import { InkOpts, Stroke, rasterize } from "./ink";
 import {
 	CLAUDE_MODELS, CONTEXT_AFTER, CONTEXT_BEFORE, DEFAULT_OPENAI_BASE, DEFAULT_OPENAI_MODEL, Engine, IMAGE_EDGE,
-	Figure, Provider, Surroundings, cursorAfter, fitInsertion, placeFigures, recognize,
+	Figure, Provider, Surroundings, cursorAfter, fitInsertion, joinsBlock, placeFigures, recognize,
 } from "./transcribe";
 import { detectLang, setLang, t } from "./i18n";
 import { SIZE_MAX, SIZE_MIN } from "./dial";
@@ -386,8 +386,11 @@ export default class HandwritingPlugin extends Plugin {
 		const t0 = performance.now();
 		this.inFlight++;
 		this.last = { "started": d.toLocaleTimeString(), "engine": `${engine.provider} / ${engine.model}`, "image": `${cv.width} x ${cv.height}, ${Math.round(png.length * 0.75 / 1024)} KB`, "state": "waiting" };
+		let gap = false;
 		try {
-			const around = { ...(await this.placeMarker(view, file, marker)), notes: strokes.some((st) => st.ai) };
+			const placed = await this.placeMarker(view, file, marker);
+			gap = placed.gap;
+			const around = { ...placed.around, notes: strokes.some((st) => st.ai) };
 			const r = await recognize(png, around, engine);
 			this.last["detail"] = r.detail;
 			const md = r.figures.length ? placeFigures(r.markdown, await this.saveFigures(file, r.figures)) : r.markdown;
@@ -397,7 +400,7 @@ export default class HandwritingPlugin extends Plugin {
 		} catch (e) {
 			const msg = (e as Error)?.message ?? String(e);
 			this.last["state"] = "failed: " + msg;
-			await this.settle(file, marker, "").catch(() => { /* the note may be gone; nothing to tidy */ });
+			await this.settle(file, marker, "", gap).catch(() => { /* the note may be gone; nothing to tidy */ });
 			// The writing goes back in the pad: the one on screen, or the one
 			// parked, or a new parked one. Unless something new has been started
 			// there since -- the two pages would land on top of each other.
@@ -429,19 +432,28 @@ export default class HandwritingPlugin extends Plugin {
 	}
 
 	/** Put the placeholder in at the cursor, and read the note on either side of
-	 *  it to send along as context */
-	private async placeMarker(view: MarkdownView, file: TFile, marker: string): Promise<Surroundings> {
+	 *  it to send along as context. Also says whether a blank line was put in
+	 *  above it.
+	 *
+	 *  The result goes wherever the placeholder is when it comes back, so the
+	 *  placeholder is put where the result belongs, and only then: once it is
+	 *  in, the note is the user's. */
+	private async placeMarker(view: MarkdownView, file: TFile, marker: string): Promise<{ around: Surroundings; gap: boolean }> {
 		const title = file.basename;
 		if (view.file === file && view.getMode() === "source") {
 			const ed = view.editor;
 			const at = ed.getCursor("to");
 			const off = ed.posToOffset(at);
 			const text = ed.getValue();
-			ed.replaceRange(marker, at);
+			// On an empty line under a callout, a quote, a list or a table, after
+			// a blank line: Markdown would carry it on as part of that (#31)
+			const gap = !ed.getLine(at.line).trim() && joinsBlock((n) => ed.getLine(n), at.line - 1);
+			const placed = gap ? "\n" + marker : marker;
+			ed.replaceRange(placed, at);
 			// Anything typed while waiting goes after the placeholder, so the
 			// result ends up ahead of it, in the order it was written
-			ed.setCursor(ed.offsetToPos(off + marker.length));
-			return { title, before: text.slice(Math.max(0, off - CONTEXT_BEFORE), off), after: text.slice(off, off + CONTEXT_AFTER) };
+			ed.setCursor(ed.offsetToPos(off + placed.length));
+			return { around: { title, before: text.slice(Math.max(0, off - CONTEXT_BEFORE), off), after: text.slice(off, off + CONTEXT_AFTER) }, gap };
 		}
 		// Reading view has no cursor, so the result goes at the end of the note
 		let before = "";
@@ -449,27 +461,32 @@ export default class HandwritingPlugin extends Plugin {
 			before = data.slice(-CONTEXT_BEFORE);
 			return data + (!data ? "" : data.endsWith("\n") ? "\n" : "\n\n") + marker;
 		});
-		return { title, before, after: "" };
+		return { around: { title, before, after: "" }, gap: false };
 	}
 
 	/** Replace the placeholder with the result, or with nothing on failure.
-	 *  False when the placeholder is gone. */
-	private async settle(file: TFile, marker: string, md: string): Promise<boolean> {
+	 *  False when the placeholder is gone.
+	 *  @param gap  a blank line was put in above it: failing, that goes too,
+	 *    if it is still there */
+	private async settle(file: TFile, marker: string, md: string, gap = false): Promise<boolean> {
+		// What goes: the placeholder, and on failure the blank line made for it
+		const span = (text: string, i: number) => !md && gap && text.slice(i - 2, i) === "\n\n" ? i - 1 : i;
 		// Through an open editor if there is one: that keeps its undo history,
 		// and writing to the file underneath it would fight with unsaved edits
 		for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
 			const v = leaf.view;
 			if (!(v instanceof MarkdownView) || v.file !== file || v.getMode() !== "source") continue;
 			const ed = v.editor;
-			const i = ed.getValue().indexOf(marker);
-			if (i < 0) continue;
-			const from = ed.offsetToPos(i), to = ed.offsetToPos(i + marker.length);
+			const m = ed.getValue().indexOf(marker);
+			if (m < 0) continue;
+			const i = span(ed.getValue(), m), end = m + marker.length;
+			const from = ed.offsetToPos(i), to = ed.offsetToPos(end);
 			const next = to.line + 1 < ed.lineCount() ? ed.getLine(to.line + 1) : "";
 			const fitted = md ? fitInsertion(md, ed.getLine(from.line).slice(0, from.ch), ed.getLine(to.line).slice(to.ch), next) : "";
 			// A cursor still waiting at the placeholder moves past the result, so
 			// writing carries on after it and the result renders; one that has
 			// gone elsewhere stays put
-			const { ins, cursor } = cursorAfter(ed.getValue(), i, marker.length, fitted, ed.posToOffset(ed.getCursor()));
+			const { ins, cursor } = cursorAfter(ed.getValue(), i, end - i, fitted, ed.posToOffset(ed.getCursor()));
 			ed.replaceRange(ins, from, to);
 			if (cursor != null) ed.setCursor(ed.offsetToPos(cursor));
 			return true;
@@ -479,12 +496,13 @@ export default class HandwritingPlugin extends Plugin {
 			const i = data.indexOf(marker);
 			if (i < 0) return data;
 			found = true;
+			if (!md) return data.slice(0, span(data, i)) + data.slice(i + marker.length);
 			const ls = data.lastIndexOf("\n", i - 1) + 1;
 			let le = data.indexOf("\n", i + marker.length);
 			if (le < 0) le = data.length;
 			let ne = data.indexOf("\n", le + 1);
 			if (ne < 0) ne = data.length;
-			const ins = md ? fitInsertion(md, data.slice(ls, i), data.slice(i + marker.length, le), le < data.length ? data.slice(le + 1, ne) : "") : "";
+			const ins = fitInsertion(md, data.slice(ls, i), data.slice(i + marker.length, le), le < data.length ? data.slice(le + 1, ne) : "");
 			return data.slice(0, i) + ins + data.slice(i + marker.length);
 		});
 		return found;
