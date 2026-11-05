@@ -165,6 +165,24 @@ export function unwrapFence(s: string): string {
 /** Whether the result is block content rather than a few inline words */
 const isBlock = (md: string) => md.includes("\n") || /^(\$\$|```|#{1,6}\s|[-*+]\s|\d+[.)]\s|>|\|)/.test(md);
 
+/** Whether a line is a callout's or quote's, a list item's or a table's:
+ *  Markdown carries a line of plain text straight after one on as part of it */
+const absorbs = (line: string) => /^\s*(>|[-*+]\s|\d+[.)]\s|\|)/.test(line);
+
+/** Whether a line put straight under line `from` would be carried on into a
+ *  callout, a quote, a list or a table: the paragraph that line ends is in
+ *  one. Lines with no > or - of their own can be, carried on into it before.
+ *  A code block, displayed maths or a heading ends one, and takes in nothing.
+ *  @param line  the note's line by number */
+export function joinsBlock(line: (n: number) => string, from: number): boolean {
+	for (let n = from; n >= 0; n--) {
+		const l = line(n);
+		if (!l.trim() || /^\s*(```|~~~|\$\$|#{1,6}\s)/.test(l)) return false;
+		if (absorbs(l)) return true;
+	}
+	return false;
+}
+
 /** Where the cursor should go once the result is in.
  *
  *  Live Preview shows a block's source, not its rendering, while the cursor is
@@ -204,12 +222,11 @@ export function cursorAfter(doc: string, at: number, len: number, ins: string, c
  *  @param nextLine  the line after the cursor's, for that case */
 export function fitInsertion(md: string, lineBefore: string, lineAfter: string, nextLine = ""): string {
 	if (!isBlock(md)) return md;
-	const last = md.slice(md.lastIndexOf("\n") + 1);
-	const absorbs = /^\s*(>|[-*+]\s|\d+[.)]\s|\|)/.test(last);
+	const last = absorbs(md.slice(md.lastIndexOf("\n") + 1));
 	let out = md;
 	if (lineBefore.trim()) out = "\n" + out;
-	if (lineAfter.trim()) out += absorbs ? "\n\n" : "\n";
-	else if (absorbs && nextLine.trim()) out += "\n";
+	if (lineAfter.trim()) out += last ? "\n\n" : "\n";
+	else if (last && nextLine.trim()) out += "\n";
 	return out;
 }
 

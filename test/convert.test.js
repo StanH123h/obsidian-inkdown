@@ -1,7 +1,8 @@
 /* Several conversions at once, as the pane allows: a long page sent, then a
  * short one before the first has come back. Whatever order the answers arrive
  * in, each must replace its own placeholder, so the note ends up exactly as if
- * they had come back one by one.
+ * they had come back one by one. Then, where a result goes under a block
+ * that takes in the line under it, a callout say (#31).
  *
  * Runs the real convert() from main.ts against a stand-in editor. Requests are
  * held until the test lets them go, so it decides which answer comes first.
@@ -41,6 +42,7 @@ function editor(text) {
   const off = (p) => doc.split('\n').slice(0, p.line).reduce((o, l) => o + l.length + 1, 0) + p.ch;
   return {
     getValue: () => doc,
+    setValue: (s) => { doc = s; cur = Math.min(cur, s.length); },
     getLine: (i) => doc.split('\n')[i] ?? '',
     lineCount: () => doc.split('\n').length,
     posToOffset: off,
@@ -69,18 +71,27 @@ const page = (len) => [{ c: '#000', s: 5, pts: Array.from({ length: len }, (_, i
 const settle = async (cond) => { for (let i = 0; i < 2000 && !cond(); i++) await new Promise((r) => setImmediate(r)); };
 
 /** Send pages one after another into a note that reads "Proof:" with the
- *  cursor after it, then let the answers come back in `order`.
+ *  cursor after it, or `note` with the cursor at `cursor`, then let the
+ *  answers come back in `order`.
  *  @param replies  what each request gets back, by page
  *  @param sameSecond  send them all within one second
  *  @param between  done to the note after each page is sent but the last
- *  @param waiting  looks at the note once all are sent, before any answer */
-async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')], sameSecond = false, between, waiting, pad, parked, after } = {}) {
-  const ed = editor('Proof:\n');
+ *  @param waiting  looks at the note once all are sent, before any answer
+ *  @param meanwhile  done to the note then, after `waiting`
+ *  @param close  the note closed then too: the answers go into the file,
+ *    and the note comes back without a cursor */
+async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')], sameSecond = false, between, waiting, meanwhile, close = false, pad, parked, after, note = 'Proof:\n', cursor } = {}) {
+  const ed = editor(note);
+  if (cursor != null) ed.setCursor(ed.offsetToPos(cursor));
   const file = { path: 'Note.md', basename: 'Note' };
-  const view = Object.assign(new stub.MarkdownView(), { file, editor: ed, getMode: () => 'source', containerEl: { isConnected: true } });
+  let mode = 'source';
+  const view = Object.assign(new stub.MarkdownView(), { file, editor: ed, getMode: () => mode, containerEl: { isConnected: true } });
   const app = {
     workspace: { getLeavesOfType: (type) => (type === 'markdown' ? [{ view }] : []) },
-    vault: { process: async () => { throw new Error('the note is open: it must be edited through its editor'); } },
+    vault: { process: async (f, fn) => {
+      if (mode === 'source') throw new Error('the note is open: it must be edited through its editor');
+      ed.setValue(fn(ed.getValue()));
+    } },
     secretStorage: { getSecret: () => 'sk-ant-test' },
   };
   const plugin = new Plugin(app, { version: 'test' });
@@ -98,9 +109,11 @@ async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')]
     if (i < replies.length - 1) { between?.(ed); if (!sameSecond) clock += 1000; }
   }
   waiting?.(ed.getValue());
+  meanwhile?.(ed);
+  if (close) mode = 'preview';
   for (const i of order) { held[i](replies[i]); await jobs[i]; }
   after?.(plugin);
-  return ed.shown();
+  return close ? ed.getValue() : ed.shown();
 }
 
 (async () => {
@@ -146,6 +159,103 @@ async function run(order, { replies = [answer('$$\nA\n$$'), answer('$$\nB\n$$')]
   let over = false;
   await run([0], { replies: [refusal], parked: { empty: false, setPage: () => { over = true; } } });
   ok(!over && stub.notices.some((m) => m.includes('was not put back')), 'a parked page with writing on it is left alone, and the notice says so');
+
+  /* ---- under a block that takes in the line under it (#31) ---- */
+  // In Markdown, a line of text straight under a callout, a quote, a list
+  // or a table is part of it. With the cursor on the empty line under one,
+  // the result goes in after a blank line, outside it, and so does the
+  // placeholder while the page is read; the line under them is left as it
+  // was. Failing, the note is as it was.
+  const below = '下面的字';
+  async function under(block, what, { reply = '你好', want = '你好|\n' + below } = {}) {
+    const note = `${block}\n\n${below}`, cursor = block.length + 1;
+    let seen = '';
+    eq(await run([0], { replies: [answer(reply)], note, cursor, waiting: (t) => { seen = t; } }), `${block}\n\n${want}`, `${what}: the result after a blank line, outside it`);
+    ok(/^⏳ Reading handwriting \(\d\d:\d\d:\d\d\)…$/.test(seen.slice(block.length + 2, seen.length - below.length - 1)) && seen.startsWith(block + '\n\n') && seen.endsWith('\n' + below),
+      `${what}: the placeholder outside it too, while the page is read: ${JSON.stringify(seen)}`);
+    eq(await run([0], { replies: [refusal], note, cursor, pad: { empty: true, setPage() {} } }), `${block}\n|\n${below}`, `${what}: failing, the note as it was`);
+  }
+  // Every kind of callout Obsidian has, under each of its names
+  const kinds = ['note', 'abstract', 'summary', 'tldr', 'info', 'todo', 'tip', 'hint', 'important', 'success', 'check', 'done',
+    'question', 'help', 'faq', 'warning', 'caution', 'attention', 'failure', 'fail', 'missing', 'danger', 'error', 'bug', 'example', 'quote', 'cite'];
+  for (const k of kinds) await under(`> [!${k}] 标题\n> 正文`, `a ${k} callout`);
+  // and every shape of one
+  const shapes = {
+    'folded': '> [!note]- 折叠的\n> 正文',
+    'foldable, open': '> [!note]+ 展开着的\n> 正文',
+    'a title only': '> [!note] 只有标题',
+    'no title text': '> [!note]\n> 正文',
+    'its kind in capitals': '> [!NOTE] 大写\n> 正文',
+    'a kind of its own': '> [!自定义] 自定义类型\n> 正文',
+    'with metadata': '> [!tip|wide] **粗体**标题\n> 正文',
+    'nested': '> [!info] 外层\n> 外层正文\n> > [!warning] 里层\n> > 里层正文',
+    'ending in an empty line of its own': '> [!note] 标题\n> 正文\n>',
+    'with a list in it': '> [!todo] 清单\n> - [ ] 一件事',
+    'with maths in it': '> [!example] 例子\n> $$x^2$$',
+    'no space after >': '>[!note] 没空格\n>正文',
+    'in a list': '- 一项\n  > [!note] 列表里的\n  > 正文',
+    'with a line already taken in': '> [!note] 标题\n> 正文\nHarro',
+    'with two lines taken in, as in the test note': '> [!tip] 提示\n> 这是 callout 正文\nHarro\n你好',
+  };
+  for (const [shape, block] of Object.entries(shapes)) await under(block, `a callout, ${shape}`);
+  // The same for whatever else takes in the line under it. What decides
+  // is the paragraph above the cursor, not only its last line: a line with
+  // no > or - of its own is still in the block it was carried on into.
+  const others = {
+    'a quote': '> 普通引用',
+    'a list': '- 一项',
+    'a list with *': '* 一项',
+    'a list with +': '+ 一项',
+    'a numbered list': '1. 一项',
+    'a numbered list with )': '1) 一项',
+    'a task list': '- [ ] 待办',
+    'a nested list': '- 一项\n  - 子项',
+    'a list item over two lines': '- 买菜：西红柿、鸡蛋\n  还有葱',
+    'a line taken into a list': '- 一项\n你好',
+    'a line taken into a quote': '> 引用\n续',
+    'a line taken into a table': '| 名字 | 数字 |\n| ---- | ---- |\n| 甲 | 1 |\n你好',
+    'a table': '| 名字 | 数字 |\n| ---- | ---- |\n| 甲 | 1 |',
+  };
+  for (const [what, block] of Object.entries(others)) await under(block, what);
+  // Whatever the result is: the line above decides, not the result
+  const callout = '> [!tip] 提示\n> 正文';
+  await under(callout, 'a list as the result', { reply: '- 新的一项', want: '- 新的一项\n|\n' + below });
+  await under(callout, 'a callout as the result', { reply: '> [!note] 新的\n> 内容', want: '> [!note] 新的\n> 内容\n|\n' + below });
+  await under(callout, 'displayed maths as the result', { reply: '$$\nx\n$$', want: '$$\nx\n$$\n|' + below });
+  // Under the last line of the note
+  let atEnd = '';
+  eq(await run([0], { replies: [answer('你好')], note: callout + '\n', cursor: callout.length + 1, waiting: (t) => { atEnd = t; } }), callout + '\n\n你好|', 'under a callout at the end of the note: the same');
+  ok(atEnd.startsWith(callout + '\n\n⏳'), `and its placeholder: ${JSON.stringify(atEnd)}`);
+  eq(await run([0], { replies: [refusal], note: callout + '\n', cursor: callout.length + 1, pad: { empty: true, setPage() {} } }), callout + '\n|', 'failing there, the note as it was');
+  // Once the placeholder is in, the note is the user's: the result goes
+  // wherever the placeholder is then, and nothing is put right after it
+  const note = `${callout}\n\n${below}`, cursor = callout.length + 1;
+  const tight = (ed) => ed.setValue(ed.getValue().replace('\n\n⏳', '\n⏳'));
+  eq((await run([0], { replies: [answer('你好')], note, cursor, meanwhile: tight })).replace('|', ''), `${callout}\n你好\n${below}`,
+    'the blank line taken out while the page is read: the result where the placeholder is, the blank line not put back');
+  eq((await run([0], { replies: [refusal], note, cursor, meanwhile: tight, pad: { empty: true, setPage() {} } })).replace('|', ''), `${callout}\n\n${below}`,
+    'failing then: only the placeholder goes, the callout\'s own line break stays');
+  const elsewhere = (ed) => { const m = ed.getValue().match(/⏳[^\n]*…/)[0]; ed.setValue(ed.getValue().replace(m, '') + m); };
+  eq((await run([0], { replies: [answer('你好')], note, cursor, meanwhile: elsewhere })).replace('|', ''), `${callout}\n\n\n${below}你好`,
+    'the placeholder moved to the end of the note: the result there, the line it left as it was');
+  eq(await run([0], { replies: [answer('你好')], note, cursor, close: true }), `${callout}\n\n你好\n${below}`,
+    'the note closed while the page is read: the result into the file, where the placeholder is');
+  eq(await run([0], { replies: [refusal], note, cursor, close: true, pad: { empty: true, setPage() {} } }), note, 'failing then: the file as it was');
+
+  // The rest as it was. | is the cursor.
+  const same = async (shown, want, what) => eq(await run([0], { replies: [answer('你好')], note: shown.replace('|', ''), cursor: shown.indexOf('|') }), want, what);
+  await same(`普通文字\n|\n${below}`, `普通文字\n你好|\n${below}`, 'under plain text: no blank line, as before');
+  await same(`${callout}\n\n|\n${below}`, `${callout}\n\n你好|\n${below}`, 'a blank line under the callout already: no second one');
+  await same(`> [!note] 标题\n> 正文中|间\n\n${below}`, `> [!note] 标题\n> 正文中你好|间\n\n${below}`, 'in the middle of a callout\'s text: in it, as before');
+  await same(`${callout}|\n\n${below}`, `${callout}你好|\n\n${below}`, 'at the end of its last line, which is in it: as before, not this issue');
+  await same(`${callout}\n|Harro`, `${callout}\n你好|Harro`, 'at the start of a line it has taken in: in it, as before');
+  await same(`# 标题\n|\n${below}`, `# 标题\n你好|\n${below}`, 'under a heading: no blank line');
+  await same('```md\n- 不是列表\n> 不是引用\n```\n|\n' + below, '```md\n- 不是列表\n> 不是引用\n```\n你好|\n' + below, 'under a code block, whatever its lines look like: no blank line');
+  await same(`$$\nx\n$$\n|\n${below}`, `$$\nx\n$$\n你好|\n${below}`, 'under displayed maths: no blank line');
+  await same('$$\n- x + 1\n$$\n|\n' + below, '$$\n- x + 1\n$$\n你好|\n' + below, 'under displayed maths, whatever its lines look like: no blank line');
+  await same(`普通文字\n第二行\n|\n${below}`, `普通文字\n第二行\n你好|\n${below}`, 'under a plain paragraph over two lines: no blank line');
+  await same(`${callout}\n\n普通文字\n|\n${below}`, `${callout}\n\n普通文字\n你好|\n${below}`, 'under a plain paragraph after a callout, a blank line between: no blank line');
+  await same(`> 引用\n# 标题\n|\n${below}`, `> 引用\n# 标题\n你好|\n${below}`, 'under a heading straight after a quote, which ends it: no blank line');
 
   console.log(bad ? `\n${bad} of ${n} checks failed` : `PASS convert: ${n} checks`);
   process.exit(bad ? 1 : 0);
